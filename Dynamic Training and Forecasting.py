@@ -91,7 +91,7 @@ plt.show()
 
 
 
-
+import seaborn as sns
 import os
 GPU_ID="0"
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
@@ -115,6 +115,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, mean_absolute_error
 from spektral.layers import GCNConv, SAGPool, MinCutPool, GlobalAttentionPool, JustBalancePool, DiffPool
+from spektral.layers import GATv2Conv
 from spektral.utils import normalized_adjacency
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -189,19 +190,6 @@ def data_preprocess(df, diff_order, start_index, end_index,moving_average,MA_win
     # Adjust the index offset for the differencing order
     df_diff = df_diff.loc[start_index + diff_order:end_index]
 
-    # # Find out the percentage of missing values in each column in the given dataset
-    # percent_missing = df.isnull().mean()
-    # missing_value_df = pd.DataFrame({'column_name': df.columns,
-    #                                  'percent_missing': percent_missing})
-    # df = df[df.columns[percent_missing < 0.05]]
-    # df = df.fillna(method='ffill').fillna(method='bfill')
-    #
-    # # Find out the percentage of missing values in each column in the given dataset
-    # percent_missing = df_diff.isnull().mean()
-    # missing_value_df_diff = pd.DataFrame({'column_name': df_diff.columns,
-    #                                       'percent_missing': percent_missing})
-    # df_diff = df_diff[df_diff.columns[percent_missing < 0.05]]
-    # df_diff = df_diff.fillna(method='ffill').fillna(method='bfill')
 
     return df, df_diff
 
@@ -271,32 +259,12 @@ def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, strid
             # we put absolute value because GCN does not accept negative adjacency
             corr = np.corrcoef(X_corr[:len(X_corr) - horizon], rowvar=False)
             # Apply the filter to keep only correlations with absolute values greater than 0.05
-            # corr = np.where(np.abs(corr) > 0.05, corr, 0)
+            corr = np.where(np.abs(corr) > 0.05, corr, 0)
+
             # Normalize the corr to be in the range [0, 1]
-            normalized_corr = (1 + corr) / 2
-            correlation_seq.append(normalized_corr)
+            # normalized_corr = (1 + corr) / 2
+            correlation_seq.append(corr)
 
-            # # Assuming X_corr is your data matrix and horizon is the number of steps ahead for forecasting
-            # X_corr_subset = X_corr[:len(X_corr) - horizon]
-            #
-            # # Transpose the matrix to get (variables, instances)
-            # X_corr_subset_transposed = X_corr_subset.T
-            #
-            # # Calculate cosine similarity between columns (variables)
-            # cos_sim = cosine_similarity(X_corr_subset_transposed)
-            #
-            # # Normalize the cosine similarity to be in the range [0, 1]
-            # normalized_cos_sim = (1 + cos_sim) / 2
-            #
-            #
-            # # Append the result to correlation_seq
-            # correlation_seq.append(normalized_cos_sim)
-
-
-
-            # corr = np.corrcoef(X_corr[:len(X_corr) - horizon], rowvar=False)
-            # corr = (corr + 1) / 2  # This shifts and scales the values to be between 0 and 1
-            # correlation_seq.append(corr)
 
     for instance in range(save_instance, len(X) - sequence_length - horizon +1, stride):
         if ignore_first_instance_stride:
@@ -324,21 +292,21 @@ def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, strid
 
                 correlation_seq.append(corr)
 
-        # Immediately after sequence generation, capture the last known value
-        if differenced_target == True:
+        # # Immediately after sequence generation, capture the last known value
+        # if differenced_target == True:
 
-            if moving_average==True:
-                ## Apply moving average on last_value_before_sequence
-                last_value_before_sequence = data_[target_name].iloc[max(0,
-                                                                         instance + sequence_length - diff_order + 2 - MA_window_size):instance + sequence_length - diff_order + 2].mean()
-            else:
-                # Adjust the index to capture the last known value correctly
-                last_value_before_sequence = data_[target_name].iloc[instance + sequence_length - diff_order + 1]
-
-            last_value_before_sequence = np.expand_dims(last_value_before_sequence, axis=0)
-            save_last_known_values.append(last_value_before_sequence)
+        if moving_average==True:
+            ## Apply moving average on last_value_before_sequence
+            last_value_before_sequence = data_[target_name].iloc[max(0,
+                                                                     instance + sequence_length - diff_order + 2 - MA_window_size):instance + sequence_length - diff_order + 2].mean()
         else:
-            save_last_known_values.append(1)
+            # Adjust the index to capture the last known value correctly
+            last_value_before_sequence = data_[target_name].iloc[instance + sequence_length - diff_order + 1]
+
+        last_value_before_sequence = np.expand_dims(last_value_before_sequence, axis=0)
+        save_last_known_values.append(last_value_before_sequence)
+        # else:
+        #     save_last_known_values.append(1)
 
     del X
     save_instance = instance
@@ -363,7 +331,7 @@ def plot_prediction_graph(original_y, forecast_list, test_boundary,
     # Create a legend with custom labels
     actual_labels = ['actual_{}'.format(i) for i in range(len(target_name))]
     forecast_labels = ['forecast_{}'.format(i) for i in range(len(target_name))]
-    legend_labels = ['test boundary'] + actual_labels + forecast_labels
+    legend_labels = actual_labels + forecast_labels
     plt.legend(legend_labels)
 
     # plt.legend(['test boundary', 'actual', 'prediction'])
@@ -427,7 +395,7 @@ class ReverseDifferencingLayer(tf.keras.layers.Layer):
 
 
 def final_prediction(x_seq,Y_scaler, scaler2, decoder_Y_seq,last_known_values, correlation_seq, sequence_length, horizon, model, data, stride,
-                     target_name, differenced_target, diff_order):
+                     target_name, differenced_target, diff_order, save_dict):
 
     x_seq = np.expand_dims(x_seq[-1], axis=0)
     decoder_Y_seq = np.expand_dims(decoder_Y_seq[-1], axis=0)
@@ -440,38 +408,40 @@ def final_prediction(x_seq,Y_scaler, scaler2, decoder_Y_seq,last_known_values, c
     # Prediction
     y_pred = model.predict([x_seq, correlation_seq, decoder_Y_seq, last_known_values])
 
+    if use_graph_layer:
+        # Get attention coefficients
+        gc_1_attn, gc_2_attn = model.attention_submodel.predict([x_seq, correlation_seq, decoder_Y_seq, last_known_values])
+        # Visualize attention
+
+        # Assuming gc_1_attn and gc_2_attn have shape (batch_size, N, attn_heads, N)
+        # Step 1: Merge the heads by averaging
+        gc_1_attn_merged = np.mean(gc_1_attn, axis=2)  # Shape: (batch_size, N, N)
+        gc_2_attn_merged = np.mean(gc_2_attn, axis=2)  # Shape: (batch_size, N, N)
+
+        # Step 2: Visualize attention coefficients for the first batch
+        attn_coef_mean_1 = gc_1_attn_merged[0]  # Select the first graph in the batch
+        plt.figure(figsize=(6, 4))
+        sns.heatmap(attn_coef_mean_1, cmap="viridis")
+        plt.title("Attention Coefficients - GAT Layer 1 (Merged Heads)")
+        plt.xlabel("Node j")
+        plt.ylabel("Node i")
+        plt.savefig("gat_layer_1.png")
+        plt.savefig(f"{save_dict}/gat_layer_1_it={iter + 1}.png", dpi=300)
+
+        attn_coef_mean_2 = gc_2_attn_merged[0]  # Select the first graph in the batch
+        plt.figure(figsize=(6, 4))
+        sns.heatmap(attn_coef_mean_2, cmap="viridis")
+        plt.title("Attention Coefficients - GAT Layer 2 (Merged Heads)")
+        plt.xlabel("Node j")
+        plt.ylabel("Node i")
+        plt.savefig(f"{save_dict}/gat_layer_2_it={iter + 1}.png", dpi=300)
+
+
+
+
+
     y_pred_rev = y_pred
 
-
-    '''
-    # Note: I removed this reversal operation and relocated it to the final layer within the model.
-    # This adjustment was made to gain more control over the model's performance.
-
-
-    # if differenced_target and diff_order>=1:
-    #     period_sum=y_pred.copy()
-    #     # Reverse differencing based on the diff_order
-    #     df_diff = data.copy()
-    #     save = []
-    #     save.append(data)
-    #     for i in range(1, diff_order):
-    #         df_diff = df_diff.diff(periods=1)
-    #         # Add the differenced data to the save list
-    #         save.append(df_diff)
-    #     for i in range(diff_order):
-    #         # Compute the cumulative sum for each row
-    #         period_sum = period_sum.cumsum(axis=1)
-    #
-    #     # Create a boolean mask to select the columns that are in target_name
-    #         column_mask = np.isin(data.columns, target_name)
-    #         new_value = save[diff_order-1-i].values[1 + sequence_length - diff_order:-horizon:stride, column_mask][-1, None]
-    #         period_sum = period_sum + new_value
-    #         period_sum = np.insert(period_sum, 0, new_value, axis=1)
-    #
-    #     y_pred_rev=period_sum[:,diff_order:,:]
-    # else:
-    #     y_pred_rev = y_pred
-    '''
 
 
     if normalized_data==True:
@@ -484,9 +454,12 @@ def final_prediction(x_seq,Y_scaler, scaler2, decoder_Y_seq,last_known_values, c
             y_pred_rev = np.expand_dims(np.squeeze(y_pred_rev, axis=0),
                                         axis=0)
     else:
-        y_pred_rev = scaler2.transform(np.squeeze(y_pred_rev, axis=0))
-        y_pred_rev = np.expand_dims(y_pred_rev,
-                                axis=0) # reverse scaler to plot later in the original scale
+        # y_pred_rev = scaler2.transform(np.squeeze(y_pred_rev, axis=0))
+        # y_pred_rev = np.expand_dims(y_pred_rev,
+        #                         axis=0) # reverse scaler to plot later in the original scale
+
+        y_pred_rev = np.expand_dims(np.squeeze(y_pred_rev, axis=0),
+                                    axis=0)
 
 
     n_rows = data.shape[0] - sequence_length - horizon
@@ -503,53 +476,22 @@ def final_prediction(x_seq,Y_scaler, scaler2, decoder_Y_seq,last_known_values, c
                 actual_array = np.expand_dims(
                     data[target_name].values[indices[-1, None] + np.arange(horizon)], axis=0)
         else:
-            actual_array = scaler2.transform(data[target_name].values[indices[-1, None] + np.arange(horizon)])
-            actual_array = np.expand_dims(actual_array
-                , axis=0)
+
+            actual_array = np.expand_dims(
+                data[target_name].values[indices[-1, None] + np.arange(horizon)], axis=0)
+
 
         datetime_index = np.expand_dims(data.index.to_numpy()[indices[-1, None] + np.arange(horizon)], axis=0)
     else:
         if normalized_data == True:
             actual_array = Y_scaler.inverse_transform(data[target_name].values[indices[-1, None] + horizon - 1])
         else:
-            actual_array = scaler2.transform(data[target_name].values[indices[-1, None] + horizon - 1])
+            actual_array = data[target_name].values[indices[-1, None] + horizon - 1]
         datetime_index = data.index.to_numpy()[indices[-1, None] + horizon - 1]
 
 
     return actual_array, y_pred_rev, datetime_index, y_pred
 
-
-'''
-# Other correlation coefficients that I did not use. I used simple correlation
-def chatterjee(x, y, tie_method='average'):
-    """
-    Calculate the Chatterjee correlation coefficient between two arrays.
-
-    Parameters:
-        x (array-like): The first array of data.
-        y (array-like): The second array of data.
-        tie_method (str, optional): Method to handle ties when ranking data. Default is 'average'.
-
-    Returns:
-        float: The Chatterjee correlation coefficient.
-    """
-    df = pd.DataFrame({"X": x, "Y": y})
-    n = len(df)
-
-    df['rank_x'] = df['X'].rank(method=tie_method)
-    df['rank_y'] = df['Y'].rank(method=tie_method)
-
-    df.sort_values(by='rank_x', inplace=True)
-
-    sum_term_num = df['rank_y'].sub(df['rank_y'].shift()).abs().sum()
-
-    l_i = n - df['rank_y']
-    sum_den = (l_i * (n - l_i)).sum()
-
-    coefficient = (1 - n * sum_term_num / (2 * sum_den))
-
-    return np.maximum(coefficient, 0)
-'''
 
 
 def data_set_generation(data, data_diff, max_lag, target_as_feature, target_name):
@@ -586,8 +528,9 @@ def data_set_generation(data, data_diff, max_lag, target_as_feature, target_name
 
     # Drop the first few rows to remove Nans.
 
-    new_data = new_data.dropna()
-    new_data_diff = new_data_diff.dropna()
+    new_data = new_data.iloc[max_lag:]
+    new_data_diff = new_data_diff.iloc[max_lag:]
+
 
     update_target_name = []
     if target_as_feature == True:
@@ -712,7 +655,7 @@ if __name__ == '__main__':
     # Define the base path and file pattern
     base_path = [
                   # 'C:/Users/sarab/Desktop/Valley Fever/Data/Aggregated Data/Maricopa/Maricopa - For Analysis.csv'
-                "C:/Users/sarab/Desktop/desktop/Valley Fever/Data/Aggregated Case Data/Final Data/Number of Cases_Weekly_data.csv"
+                "C:/Users/sarab/Desktop/desktop/Valley Fever/Weather Data MARICOPA (MMWR Weeks)/Clean Data(Maricopa)/Clean Processed Data2.csv"
                 ]
 
     # Loop over the numbers you're interested in
@@ -727,13 +670,13 @@ if __name__ == '__main__':
 
 
         # for horizon in [96, 192, 336, 720]:
-        for horizon in [24]:
+        for horizon in [8]:
                 model_index = model_name + '_'+ str(horizon)
 
                 # Data preprocessing parameters
 
                 model_weights_update_iter = int(round(0.2 * len(data)))+1 # I did not want to have dynamic retraining for simplicity
-                sequence_length = 2*horizon
+                sequence_length = 3*horizon
                 stride = 1
                 dynamic_test_size = math.ceil(horizon / stride)
                 use_graph_layer = True
@@ -744,13 +687,13 @@ if __name__ == '__main__':
                 diff_order=1
                 normalized_data = True
                 reverse_normalization=True
-                initial_training_normalization= True
+                initial_training_normalization= False
                 repeat_corr = True
                 Y_sequence = True
                 single_step = False
                 moving_average=False
                 MA_window_size=12
-                batch_size = 5
+                batch_size = 10
 
 
 
@@ -772,8 +715,8 @@ if __name__ == '__main__':
                 num_heads = 8
                 ff_dim = 128
                 mlp_units = [128]
-                dropout = 0.05
-                mlp_dropout = 0.05
+                dropout = 0.1
+                mlp_dropout = 0.1
 
                 '''#################### create an output file in the current directory ########################'''
                 # Generate a string representing the current date and time
@@ -805,11 +748,11 @@ if __name__ == '__main__':
 
 
                 start_index = 0
-                train_end = 1380
+                train_end = 850
                 # val_end = 12 * 30 * 24 + 4 * 30 * 24
                 # test_end = 12 * 30 * 24 + 4 * 30 * 24 + 4 * 30 * 24
-                test_start_index = 1730 # val_end
-                test_end_index = 1764
+                test_start_index = 900 # val_end
+                test_end_index = 987 # test_end
 
 
 
@@ -1000,36 +943,41 @@ if __name__ == '__main__':
                         l2_reg = 2.5e-4  # L2 regularization rate
                         x = tf.transpose(inputs, perm=[0, 2, 1])
 
-                        x_out2, lap_out = MinCutPool(int(x.shape[1] // 2), return_selection=False,
+                        x_out2, lap_out = MinCutPool(int(x.shape[1]), return_selection=False,
                                                      name='mincut_pool_1')([x, inp_lap])
 
                         do_1 = Dropout(dropout)(x_out2)
-                        gc_1 = GATConv(
-                            int(horizon // 2),
+
+                        # do_1=x
+                        # lap_out=inp_lap
+                        gc_1 , gc_1_attn = GATConv(
+                            int(math.ceil(x_out2.shape[2])),
                             attn_heads=num_heads,
                             concat_heads=False,
                             dropout_rate=dropout,
-                            activation="elu",
+                            activation="relu",
                             kernel_regularizer=l2(l2_reg),
                             attn_kernel_regularizer=l2(l2_reg),
                             bias_regularizer=l2(l2_reg),
+                            return_attn_coef=True,
                         )([do_1, lap_out])
 
-                        do_2 = Dropout(dropout)(gc_1)
-                        gc_2 = GATConv(
-                            int(horizon // 2),
-                            attn_heads=num_heads,
-                            concat_heads=False,
-                            dropout_rate=dropout,
-                            activation="softmax",
-                            kernel_regularizer=l2(l2_reg),
-                            attn_kernel_regularizer=l2(l2_reg),
-                            bias_regularizer=l2(l2_reg),
-                        )([do_2, lap_out])
+                        # do_2 = Dropout(dropout)(gc_1)
+                        # gc_2 ,gc_2_attn= GATConv(
+                        #     int(math.ceil(horizon / 2)),
+                        #     attn_heads=num_heads,
+                        #     concat_heads=False,
+                        #     dropout_rate=dropout,
+                        #     activation="softmax",
+                        #     kernel_regularizer=l2(l2_reg),
+                        #     attn_kernel_regularizer=l2(l2_reg),
+                        #     bias_regularizer=l2(l2_reg),
+                        #     return_attn_coef=True,
+                        # )([do_2, lap_out])
 
-                        graph_output = tf.transpose(gc_2, perm=[0, 2, 1])
-
-                        return graph_output
+                        graph_output = tf.transpose(gc_1, perm=[0, 2, 1])
+                        gc_2_attn=gc_1_attn
+                        return graph_output, gc_1_attn, gc_2_attn
 
 
                     def lstm_encoder_decoder_block(graph_output, decoder_inputs, latent_dim, horizon, target_name, dropout):
@@ -1037,18 +985,18 @@ if __name__ == '__main__':
 
                         l2_reg = 2.5e-4  # L2 regularization rate
 
-                        encoder_lstm_1 = LSTM(latent_dim, kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(graph_output)
+                        encoder_lstm_1 = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(graph_output)
                         encoder_drop_1 = Dropout(0.1)(encoder_lstm_1)
 
                                                 # Final LSTM layer of the encoder
-                        encoder_outputs, forward_h, forward_c = LSTM(int(latent_dim // 2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_state=True)(
+                        encoder_outputs, forward_h, forward_c = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_state=True)(
                             encoder_drop_1)
 
                         initial_state = [forward_h, forward_c]
 
 
                         # Decoder
-                        decoder_lstm_1 = LSTM(int(latent_dim // 2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(decoder_inputs,
+                        decoder_lstm_1 = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(decoder_inputs,
                                                                                            initial_state=initial_state)
                         decoder_drop_1 = Dropout(dropout)(decoder_lstm_1)
                         # Add additional LSTM layers for stacking in the decoder
@@ -1058,9 +1006,21 @@ if __name__ == '__main__':
                         if Y_sequence == True:
 
 
-                            outputs = LSTM(horizon, kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=False)(decoder_drop_2)
-                            outputs = tf.expand_dims(outputs, axis=2)
-                            outputs = keras.layers.Dense(len(target_name))(outputs)
+                            # outputs = LSTM(horizon, kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=False)(decoder_drop_2)
+                            # outputs = tf.expand_dims(outputs, axis=2)
+                            # outputs = keras.layers.Dense(len(target_name))(outputs)
+
+
+
+                            # LSTM layer now returns the entire sequence
+                            outputs = LSTM(horizon, kernel_regularizer=tf.keras.regularizers.l2(l2_reg),
+                                           return_sequences=True)(decoder_drop_2)
+
+                            # Since return_sequences=True, outputs shape is (batch_size, sequence_length, horizon)
+                            # Apply Dense layer to each timestep
+                            outputs = keras.layers.TimeDistributed(keras.layers.Dense(len(target_name)))(outputs)
+
+
                             # print("done")
                         else:
                             decoder_dense_input = LSTM(len(target_name), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=False)(decoder_drop_2)
@@ -1080,12 +1040,13 @@ if __name__ == '__main__':
                             inp_lap = []
 
                         if use_graph_layer:
-                            graph_output = graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout,
-                                                                  horizon)
+                            graph_output, gc_1_attn, gc_2_attn = graph_processing_block(inputs, inp_lap, head_size,
+                                                                                        num_heads, dropout,
+                                                                                        horizon)
                         else:
                             graph_output = inputs
 
-                        latent_dim = 64
+                        latent_dim = 128
                         decoder_inputs = tf.keras.Input(
                             shape=(horizon, len(target_name)), name='decoder_inputs')
 
@@ -1094,11 +1055,24 @@ if __name__ == '__main__':
                         # Assume 'last_known_value_input' is an additional input layer for the last known value before prediction starts
                         last_known_value_input = tf.keras.Input(shape=(1, len(target_name)), name='last_known_values')
                         #
-                        # Integrate the ReverseDifferencingLayer
-                        outputs = ReverseDifferencingLayer()([outputs, last_known_value_input])
+                        if differenced_target == True:
+                            # Integrate the ReverseDifferencingLayer
+                            outputs = ReverseDifferencingLayer()([outputs, last_known_value_input])
 
+                            # Return a model with outputs for training and a submodel for attention
+                        model = keras.Model(
+                            [inputs, inp_lap, decoder_inputs, last_known_value_input],
+                            outputs,  # Use only `outputs` for training
+                        )
+                        if use_graph_layer:
+                            # Store attention as a submodel
+                            model.attention_submodel = keras.Model(
+                                [inputs, inp_lap, decoder_inputs, last_known_value_input],
+                                [gc_1_attn, gc_2_attn],  # Include attention coefficients here
+                            )
 
-                        return keras.Model([inputs, inp_lap, decoder_inputs,last_known_value_input], outputs)
+                        return model
+
 
 
 
@@ -1207,35 +1181,25 @@ if __name__ == '__main__':
                         # Saving weights as per your existing code
                         model.save_weights('model_weights_{}.h5'.format(model_index))
 
-                        # Plotting the training and validation loss
-                        # plt.figure(figsize=(10, 6))
-                        # plt.plot(history.history['loss'], label='Train Loss')
-                        # plt.plot(history.history['val_loss'], label='Validation Loss')
-                        # plt.title('Model Loss Over Epochs')
-                        # plt.ylabel('Loss')
-                        # plt.xlabel('Epoch')
-                        # plt.legend(loc='upper right')
-                        # plt.show()
-
-
 
                     # Predict from last sequence
 
 
                     actual, y_pred_rev, datetime_index, y_pred = final_prediction(x_seq=save_x_seq,
                                                                                   Y_scaler=Y_scaler,
-                                                                                  scaler2=scaler2,
+                                                                                  scaler2= scaler2,
                                                                                   decoder_Y_seq=save_decoder_y_seq,
                                                                                   last_known_values=save_last_known_values,
                                                                                   correlation_seq=save_correlation_seq,
                                                                                   sequence_length=sequence_length,
                                                                                   horizon=horizon,
-                                                                                  model=model,
+                                                                                  model= model,
                                                                                   data=data_norm,
                                                                                   stride=stride,
                                                                                   target_name=target_name,
                                                                                   differenced_target=differenced_target,
-                                                                                  diff_order=diff_order)
+                                                                                  diff_order=diff_order,
+                                                                                  save_dict=directory)
 
 
                     if single_step==True:
@@ -1244,9 +1208,7 @@ if __name__ == '__main__':
                         forecast_list = [(np.expand_dims(y_pred_rev[-1, :][-1],axis=0), datetime_index[-1][-1])]
                         actual_list = [(actual[-1, :][-1], datetime_index[-1][-1])]
 
-                        # #Single-step Forecast
-                        # forecast_list.append((np.expand_dims(y_pred_rev[-1, :][-1],axis=0), datetime_index[-1][-1]))
-                        # actual_list.append((actual[-1, :][-1], datetime_index[-1][-1]))
+
                     else:
 
                         #Multi-step Forecast
@@ -1268,31 +1230,23 @@ if __name__ == '__main__':
                     Test_MAE = mean_absolute_error(flattened_actual, flattened_forecast)
                     Test_MSE = mean_squared_error(flattened_actual, flattened_forecast)
 
-                    # plot last 100 target values:
+                    if reverse_normalization==True and normalized_data==True:
+                      plot_prediction_graph(original_y=data.loc[end_index-horizon:end_index][target_name_original], forecast_list=forecast_list,
+                                            test_boundary=test_start_index, horizon=horizon,
+                                            Test_KPI=Test_MSE, iter=iter, save_dict=directory)
+                    elif normalized_data== False:
+                      transformed_data = scaler2.transform(data.loc[end_index-horizon:end_index][target_name_original])
+                      # Convert the transformed data back into a pandas DataFrame or Series with the original index
+                      original_y = pd.Series(transformed_data.squeeze(), index=data.loc[end_index-horizon:end_index].index)
 
-                    # if reverse_normalization==True and normalized_data==True:
-                    #   plot_prediction_graph(original_y=data.loc[end_index-horizon:end_index][target_name_original], forecast_list=forecast_list,
-                    #                         test_boundary=test_start_index, horizon=horizon,
-                    #                         Test_KPI=Test_MSE, iter=iter, save_dict=directory)
-                    # elif normalized_data== False:
-                    #   transformed_data = scaler2.transform(data.loc[end_index-horizon:end_index][target_name_original])
-                    #   # Convert the transformed data back into a pandas DataFrame or Series with the original index
-                    #   original_y = pd.Series(transformed_data.squeeze(), index=data.loc[end_index-horizon:end_index].index)
-                    #
-                    #   plot_prediction_graph(original_y=original_y, forecast_list=forecast_list,
-                    #                         test_boundary=test_start_index, horizon=horizon,
-                    #                         Test_KPI=Test_MSE, iter=iter, save_dict=directory)
-                    # else:
-                    #   # For ETD datasets we used (data_norm[target_name] instead of data[target_name_original]) It seems papers used normalized data for prediction results
-                    #   plot_prediction_graph(original_y=data_norm[target_name], forecast_list=forecast_list,
-                    #                       test_boundary=test_start_index,horizon=horizon,
-                    #                       Test_KPI=Test_MSE, iter=iter, save_dict=directory)
-
-
-                    # plot_norm_diff_graph(Y_seq=np.asarray(save_y_seq), y_pred=y_pred,datetime_index=datetime_index,
-                    #                    test_boundary=test_start_index,horizon=horizon,
-                    #                    Test_KPI=Test_CORR, iter=iter, save_dict=directory)
-
+                      plot_prediction_graph(original_y=original_y, forecast_list=forecast_list,
+                                            test_boundary=test_start_index, horizon=horizon,
+                                            Test_KPI=Test_MSE, iter=iter, save_dict=directory)
+                    else:
+                      # For ETD datasets we used (data_norm[target_name] instead of data[target_name_original]) It seems papers used normalized data for prediction results
+                      plot_prediction_graph(original_y=data_norm[target_name], forecast_list=forecast_list,
+                                          test_boundary=test_start_index,horizon=horizon,
+                                          Test_KPI=Test_MSE, iter=iter, save_dict=directory)
                     '''##################### Exporting and Saving  ########################'''
 
 
@@ -1348,78 +1302,3 @@ if __name__ == '__main__':
                         sheet.append(row)
                     wb.save(output_filename)
 
-# '''
-# import os
-# import pandas as pd
-#
-# # Directory containing the .dly files
-# input_folder = r'C:\Users\sarab\Desktop\desktop\Valley Fever\Data\ghcnd_hcn\ghcnd_hcn'
-#
-# # Create a new folder for CSV files beside the input folder
-# output_folder = os.path.join(os.path.dirname(input_folder), 'converted_csv_files')
-#
-# # Create the output folder if it doesn't exist
-# if not os.path.exists(output_folder):
-#     os.makedirs(output_folder)
-#
-# # Define column widths based on the provided guide
-# colspecs = [
-#     (0, 11),  # ID (1-11)
-#     (11, 15),  # YEAR (12-15)
-#     (15, 17),  # MONTH (16-17)
-#     (17, 21),  # ELEMENT (18-21)
-# ]
-#
-# # Add specs for the 31 days in the month (value, mflag, qflag, sflag for each day)
-# for day in range(1, 32):
-#     colspecs.extend([
-#         (21 + (day - 1) * 8, 26 + (day - 1) * 8),  # VALUE
-#         (26 + (day - 1) * 8, 27 + (day - 1) * 8),  # MFLAG
-#         (27 + (day - 1) * 8, 28 + (day - 1) * 8),  # QFLAG
-#         (28 + (day - 1) * 8, 29 + (day - 1) * 8),  # SFLAG
-#     ])
-#
-# # Process each .dly file in the input folder
-# for filename in os.listdir(input_folder):
-#     if filename.endswith('.dly'):
-#         file_path = os.path.join(input_folder, filename)
-#
-#         # Read the .dly file
-#         df = pd.read_fwf(file_path, colspecs=colspecs, header=None)
-#
-#         # Assign names to the columns
-#         columns = ['ID', 'YEAR', 'MONTH', 'ELEMENT']
-#         for day in range(1, 32):
-#             columns.extend([
-#                 f'VALUE{day}', f'MFLAG{day}', f'QFLAG{day}', f'SFLAG{day}'
-#             ])
-#         df.columns = columns
-#
-#         # Reshape the DataFrame to have each day as a separate row
-#         data_rows = []
-#         for _, row in df.iterrows():
-#             for day in range(1, 32):
-#                 value_col = f'VALUE{day}'
-#                 if pd.notnull(row[value_col]) and row[value_col] != -9999:  # Skip missing values (-9999)
-#                     data_rows.append({
-#                         'ID': row['ID'],
-#                         'YEAR': row['YEAR'],
-#                         'MONTH': row['MONTH'],
-#                         'DAY': day,
-#                         'ELEMENT': row['ELEMENT'],
-#                         'VALUE': row[f'VALUE{day}'],
-#                         'MFLAG': row[f'MFLAG{day}'],
-#                         'QFLAG': row[f'QFLAG{day}'],
-#                         'SFLAG': row[f'SFLAG{day}']
-#                     })
-#
-#         # Convert the reshaped data into a DataFrame
-#         df_cleaned = pd.DataFrame(data_rows)
-#
-#         # Save the reshaped data into a CSV file
-#         output_file = os.path.join(output_folder, f'{os.path.splitext(filename)[0]}.csv')
-#         df_cleaned.to_csv(output_file, index=False)
-#
-#         print(f'Converted {filename} to CSV format in {output_folder}.')
-#
-# '''
