@@ -1608,6 +1608,7 @@ if __name__ == '__main__':
                 def train_model_for_stability(seed):
                     """
                     Train a model for stability testing using the SAME normalization approach as main code
+                    Uses a SUBSTANTIAL training dataset, not just a tiny test window
                     """
                     # Set the seed
                     tf.random.set_seed(seed)
@@ -1615,16 +1616,20 @@ if __name__ == '__main__':
                     np.random.seed(seed)
                     random.seed(seed)
                     
-                    # Use a fixed end_index for stability testing
-                    end_index = test_start_index + horizon
+                    # IMPORTANT: Use a substantial training dataset for stability testing
+                    # Use data from start to test_start_index (same as initial training range)
+                    # This gives us ~900 data points instead of just 8!
+                    end_index_stability = test_start_index - 1  # Use substantial training data
                     
-                    # IMPORTANT: Use the SAME normalization approach as main code
+                    print(f"    Training stability model with seed {seed} on data range [{start_index}:{end_index_stability}] ({end_index_stability-start_index+1} data points)")
+                    
+                    # Use the SAME normalization approach as main code
                     # Since initial_training_normalization=True, we use the pre-computed df_norm
-                    df_norm_local = df_norm.loc[start_index:end_index]
+                    df_norm_local = df_norm.loc[start_index:end_index_stability]
                     Y_scaler_local = Y_scaler
                     scaler2_local = scaler2
 
-                    data_norm_local, data_diff_local = data_preprocess(df_norm_local, diff_order, start_index, end_index, moving_average, MA_window_size)
+                    data_norm_local, data_diff_local = data_preprocess(df_norm_local, diff_order, start_index, end_index_stability, moving_average, MA_window_size)
                     
                     # Generate lagged variables
                     data_norm_local, data_diff_local, target_comp_updated_list_local, target_name_local = data_set_generation(
@@ -1648,16 +1653,19 @@ if __name__ == '__main__':
                         differenced_target=differenced_target, differenced_X=differenced_X, moving_average=moving_average, MA_window_size=MA_window_size
                     )
 
-                    # Test data split
+                    print(f"    Generated {len(save_x_seq_local)} sequences for stability training")
+
+                    # For stability testing, use ALL sequences for training (no test split)
+                    # We're not evaluating model performance, just learning feature importance
+                    X_train_local = np.asarray(save_x_seq_local)
+                    Y_train_local = np.asarray(save_y_seq_local)
+                    decoder_Y_train_local = np.asarray(save_decoder_y_seq_local)
+                    last_known_values_train_local = np.asarray(save_last_known_values_local)
+                    
                     if repeat_corr == True:
-                        X_train_local, X_test_local, Y_train_local, Y_test_local, decoder_Y_train_local, decoder_Y_test_local, last_known_values_train_local, last_known_values_test_local = \
-                            train_test_split(np.asarray(save_x_seq_local), np.asarray(save_y_seq_local), np.asarray(save_decoder_y_seq_local), 
-                                           np.asarray(save_last_known_values_local), test_size=dynamic_test_size, shuffle=False, random_state=1004)
                         correlation_train_local = np.array(save_correlation_seq_local)
                     else:
-                        X_train_local, X_test_local, Y_train_local, Y_test_local, decoder_Y_train_local, decoder_Y_test_local, last_known_values_train_local, last_known_values_test_local, correlation_train_local, correlation_test_local = \
-                            train_test_split(np.asarray(save_x_seq_local), np.asarray(save_y_seq_local), np.asarray(save_decoder_y_seq_local), 
-                                           np.asarray(save_last_known_values_local), np.asarray(save_correlation_seq_local), test_size=dynamic_test_size, shuffle=False, random_state=1004)
+                        correlation_train_local = np.asarray(save_correlation_seq_local)
 
                     # Build model
                     input_shape_local = X_train_local.shape[1:]
@@ -1666,8 +1674,8 @@ if __name__ == '__main__':
                     model_local = build_model(input_shape_local, correlation_shape_local, use_graph_layer=use_graph_layer)
                     model_local.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), metrics=[tf.keras.metrics.MeanSquaredError()])
 
-                    # Prepare training data
-                    validation_ratio = 0.25
+                    # Prepare training data with validation split
+                    validation_ratio = 0.2  # Use smaller validation for stability test
                     total_data_size = len(X_train_local)
                     validation_size = int(total_data_size * validation_ratio)
                     validation_indices = np.arange(total_data_size - validation_size, total_data_size)
@@ -1691,15 +1699,18 @@ if __name__ == '__main__':
                     val_gen_local = data_generator(X_train_valid_local, correlation_train_train_local, decoder_Y_train_valid_local, 
                                                  Y_train_valid_local, last_known_values_train_valid_local, batch_size=batch_size, new_data_ratio=0)
 
-                    train_steps_local = len(X_train_train_local) // batch_size
-                    val_steps_local = len(X_train_valid_local) // batch_size
+                    train_steps_local = max(1, len(X_train_train_local) // batch_size)
+                    val_steps_local = max(1, len(X_train_valid_local) // batch_size)
 
-                    # Train model
-                    callbacks_local = [keras.callbacks.EarlyStopping(patience=15, min_delta=0.001, monitor='val_mean_squared_error', mode='auto', restore_best_weights=True)]
+                    # Train model with fewer epochs for stability test (focus on feature learning)
+                    callbacks_local = [keras.callbacks.EarlyStopping(patience=10, min_delta=0.001, monitor='val_mean_squared_error', mode='auto', restore_best_weights=True)]
+                    
+                    print(f"    Training with {len(X_train_train_local)} training samples, {len(X_train_valid_local)} validation samples")
                     
                     history_local = model_local.fit(train_gen_local, steps_per_epoch=train_steps_local, validation_data=val_gen_local, 
-                                                  validation_steps=val_steps_local, epochs=50, callbacks=callbacks_local, verbose=0)  # Set verbose=0 for stability testing
+                                                  validation_steps=val_steps_local, epochs=30, callbacks=callbacks_local, verbose=0)  # Reduced epochs for faster testing
 
+                    print(f"    ✅ Completed training for seed {seed}")
                     return model_local
 
                 # Generate lagged feature names for visualization
