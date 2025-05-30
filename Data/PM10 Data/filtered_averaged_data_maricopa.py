@@ -1,132 +1,121 @@
-# import pandas as pd
-# import os
-#
-# # Directory containing the CSV files
-# data_directory = r"Z:\\PM10 Data"
-#
-# # List of input CSV files
-# file_names = [
-#     "daily_81102_2006.csv", "daily_81102_2007.csv", "daily_81102_2008.csv", "daily_81102_2009.csv",
-#     "daily_81102_2010.csv", "daily_81102_2011.csv", "daily_81102_2012.csv", "daily_81102_2013.csv",
-#     "daily_81102_2014.csv", "daily_81102_2015.csv", "daily_81102_2016.csv", "daily_81102_2017.csv",
-#     "daily_81102_2018.csv", "daily_81102_2019.csv", "daily_81102_2020.csv", "daily_81102_2021.csv",
-#     "daily_81102_2022.csv", "daily_81102_2023.csv", "daily_81102_2024.csv"
-# ]
-#
-# # Output CSV file name
-# output_file = "filtered_data_arizona_maricopa.csv"
-#
-# # Initialize an empty DataFrame to store filtered data
-# filtered_data = pd.DataFrame()
-#
-# # Process each file
-# for file_name in file_names:
-#     file_path = os.path.join(data_directory, file_name)  # Construct full file path
-#     if os.path.exists(file_path):  # Check if the file exists
-#         # Read the CSV file with the correct delimiter
-#         try:
-#             df = pd.read_csv(file_path, delimiter=",")  # Updated to use comma as delimiter
-#             print(f"Processing {file_name}")
-#             print(f"Columns: {df.columns.tolist()}")  # Debug column names
-#
-#             # Clean column names to remove leading/trailing quotes and spaces
-#             df.columns = df.columns.str.strip().str.replace('"', '')
-#
-#             # Check if required columns exist
-#             if 'State Name' in df.columns and 'County Name' in df.columns:
-#                 # Filter rows where State Name is Arizona and County Name is Maricopa
-#                 filtered_df = df[(df['State Name'] == 'Arizona') & (df['County Name'] == 'Maricopa')]
-#                 filtered_data = pd.concat([filtered_data, filtered_df], ignore_index=True)
-#             else:
-#                 print(f"Missing required columns in {file_name}")
-#         except Exception as e:
-#             print(f"Error reading {file_name}: {e}")
-#     else:
-#         print(f"File not found: {file_path}")
-#
-# # Write the filtered data to a CSV file if there's any data
-# if not filtered_data.empty:
-#     output_file_path = os.path.join(data_directory, output_file)
-#     filtered_data.to_csv(output_file_path, index=False)
-#     print(f"Filtered data has been saved to {output_file_path}")
-# else:
-#     print("No data matched the criteria.")
-#
+import pandas as pd
+import os
+import glob
 
+# Directory containing the CSV files
+data_directory = r"D:/Shared/desktop 3/Valley Fever/PM10 Maricopa"
 
+# Method code(s) to filter - set to None to include all methods
+# Common method codes:
+# 208: TEOM (Tapered Element Oscillating Microbalance)
+# 118: Gravimetric/Manual Reference Method
+# Set to a list for multiple methods: [208, 118]
+METHOD_CODE_FILTER = 79  # Change to None to include all methods
 
+# Get all Maricopa CSV files using pattern matching
+# This will find files like "Maricopa 2006.csv", "Maricopa 2007.csv", etc.
+file_pattern = os.path.join(data_directory, "Maricopa *.csv")
+file_paths = glob.glob(file_pattern)
+
+# Output CSV file name
+output_file = os.path.join(data_directory, "filtered_averaged_data_maricopa_new.csv")
+
+# Initialize an empty DataFrame to store filtered and aggregated data
+filtered_data = pd.DataFrame()
+
+# Process each file
+for file_path in file_paths:
+    file_name = os.path.basename(file_path)
+    if os.path.exists(file_path):
+        try:
+            # Read the CSV file
+            df = pd.read_csv(file_path)
+            print(f"Processing {file_name}")
+
+            # Clean column names to remove leading/trailing spaces
+            df.columns = df.columns.str.strip()
+
+            # Check if required columns exist
+            required_columns = {'Date', 'Daily Mean PM10 Concentration', 'Daily AQI Value',
+                                'State', 'County'}
+
+            if required_columns.issubset(df.columns):
+                # First, let's see what methods are in the data
+                if 'Method Code' in df.columns:
+                    unique_methods = df['Method Code'].unique()
+                    print(f"  Found Method Codes: {unique_methods}")
+
+                # Filter for Arizona and Maricopa (adjust if needed)
+                # Based on your sample data, it looks like the data might already be filtered for Maricopa
+                filtered_df = df[
+                    (df['State'] == 'Arizona') &
+                    (df['County'] == 'Maricopa')
+                    ]
+
+                # Filter by specific method code to ensure consistency
+                # Method 208 appears to be TEOM-based from your sample data
+                if 'Method Code' in df.columns and METHOD_CODE_FILTER is not None:
+                    if isinstance(METHOD_CODE_FILTER, list):
+                        filtered_df = filtered_df[filtered_df['Method Code'].isin(METHOD_CODE_FILTER)]
+                        print(f"  Filtered to Method Codes {METHOD_CODE_FILTER}: {len(filtered_df)} records")
+                    else:
+                        filtered_df = filtered_df[filtered_df['Method Code'] == METHOD_CODE_FILTER]
+                        print(f"  Filtered to Method Code {METHOD_CODE_FILTER}: {len(filtered_df)} records")
+
+                # Append to the combined DataFrame
+                filtered_data = pd.concat([filtered_data, filtered_df], ignore_index=True)
+            else:
+                print(f"Missing required columns in {file_name}")
+                print(f"Available columns: {list(df.columns)}")
+        except Exception as e:
+            print(f"Error reading {file_name}: {e}")
+    else:
+        print(f"File not found: {file_path}")
+
+# If data is present, average by Date
+if not filtered_data.empty:
+    # Convert Date to datetime for proper grouping
+    filtered_data['Date'] = pd.to_datetime(filtered_data['Date'])
+
+    # Extract year for additional grouping if needed
+    filtered_data['Year'] = filtered_data['Date'].dt.year
+
+    # Group by Date and calculate averages for PM10 and AQI
+    # This will average across all sites for each date
+    averaged_data = (
+        filtered_data.groupby('Date', as_index=False)
+        .agg({
+            'Daily Mean PM10 Concentration': 'mean',
+            'Daily AQI Value': 'mean'
+        })
+    )
+
+    # Round the averaged values to reasonable precision
+    averaged_data['Daily Mean PM10 Concentration'] = averaged_data['Daily Mean PM10 Concentration'].round(2)
+    averaged_data['Daily AQI Value'] = averaged_data['Daily AQI Value'].round(1)
+
+    # Sort by date
+    averaged_data = averaged_data.sort_values('Date')
+
+    # Save the result to a CSV file
+    averaged_data.to_csv(output_file, index=False)
+    print(f"\nAveraged data has been saved to {output_file}")
+    print(f"Total days processed: {len(averaged_data)}")
+
+    # Create a method summary if Method Code column exists
+    if 'Method Code' in filtered_data.columns:
+        method_summary = filtered_data.groupby('Method Code').agg({
+            'Daily Mean PM10 Concentration': ['count', 'mean', 'std'],
+            'Daily AQI Value': 'mean'
+        })
+        print("\nMethod Code Summary:")
+        print(method_summary)
+        if METHOD_CODE_FILTER is not None:
+            print(f"\nNote: Only Method Code(s) {METHOD_CODE_FILTER} included in the averaged output.")
+        else:
+            print("\nNote: All method codes were included in the averaged output.")
 
 #
-# import pandas as pd
-# import os
-#
-# # Directory containing the CSV files
-# data_directory = r"Z:\\PM10 Data"
-#
-# # List of input CSV files
-# file_names = [
-#     "daily_81102_2006.csv", "daily_81102_2007.csv", "daily_81102_2008.csv", "daily_81102_2009.csv",
-#     "daily_81102_2010.csv", "daily_81102_2011.csv", "daily_81102_2012.csv", "daily_81102_2013.csv",
-#     "daily_81102_2014.csv", "daily_81102_2015.csv", "daily_81102_2016.csv", "daily_81102_2017.csv",
-#     "daily_81102_2018.csv", "daily_81102_2019.csv", "daily_81102_2020.csv", "daily_81102_2021.csv",
-#     "daily_81102_2022.csv", "daily_81102_2023.csv", "daily_81102_2024.csv"
-# ]
-#
-# # Output CSV file name
-# output_file = "Z:/PM10 Data/filtered_averaged_data_maricopa.csv"
-#
-# # Initialize an empty DataFrame to store filtered and aggregated data
-# filtered_data = pd.DataFrame()
-#
-# # Process each file
-# for file_name in file_names:
-#     file_path = os.path.join(data_directory, file_name)  # Construct full file path
-#     if os.path.exists(file_path):  # Check if the file exists
-#         # Read the CSV file
-#         try:
-#             df = pd.read_csv(file_path, delimiter=",")  # Assuming comma as delimiter
-#             print(f"Processing {file_name}")
-#
-#             # Clean column names to remove leading/trailing quotes and spaces
-#             df.columns = df.columns.str.strip().str.replace('"', '')
-#
-#             # Check if required columns exist
-#             if {'State Name', 'County Name', 'Method Name', 'Date Local', 'Arithmetic Mean', 'AQI'}.issubset(df.columns):
-#                 # Filter for Arizona, Maricopa, and the specified Method Name
-#                 filtered_df = df[
-#                     (df['State Name'] == 'Arizona') &
-#                     (df['County Name'] == 'Maricopa') &
-#                     (df['Method Name'] == 'INSTRUMENTAL-R&P SA246B-INLET - TEOM-GRAVIMETRIC')
-#                 ]
-#                 # Append to the combined DataFrame
-#                 filtered_data = pd.concat([filtered_data, filtered_df], ignore_index=True)
-#             else:
-#                 print(f"Missing required columns in {file_name}")
-#         except Exception as e:
-#             print(f"Error reading {file_name}: {e}")
-#     else:
-#         print(f"File not found: {file_path}")
-#
-# # If data is present, average by Date Local
-# if not filtered_data.empty:
-#     # Convert Date Local to datetime for proper grouping
-#     filtered_data['Date Local'] = pd.to_datetime(filtered_data['Date Local'])
-#
-#     # Group by Date Local and calculate averages for Arithmetic Mean and AQI
-#     averaged_data = (
-#         filtered_data.groupby('Date Local', as_index=False)
-#         .agg({'Arithmetic Mean': 'mean', 'AQI': 'mean'})
-#     )
-#
-#     # Save the result to a CSV file
-#     output_file_path = os.path.join(data_directory, output_file)
-#     averaged_data.to_csv(output_file_path, index=False)
-#     print(f"Averaged data has been saved to {output_file_path}")
-# else:
-#     print("No data matched the criteria.")
-
-
-
 #########################################################################################
 import pandas as pd
 from datetime import datetime, timedelta
@@ -159,11 +148,11 @@ def calculate_mmwr_week(date):
     return mmwr_year, mmwr_week
 
 # Load the data
-file_path = 'filtered_averaged_data_maricopa.csv'  # Replace with your file path
+file_path = 'filtered_averaged_data_maricopa_new.csv'  # Replace with your file path
 filtered_averaged_data = pd.read_csv(file_path)
 
 # Convert the date column to datetime
-filtered_averaged_data['Date'] = pd.to_datetime(filtered_averaged_data['Date Local'], format='%Y-%m-%d', errors='coerce')
+filtered_averaged_data['Date'] = pd.to_datetime(filtered_averaged_data['Date'], format='%Y-%m-%d', errors='coerce')
 
 
 

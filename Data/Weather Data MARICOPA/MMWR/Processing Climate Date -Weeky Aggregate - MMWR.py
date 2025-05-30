@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from datetime import datetime, timedelta
+import numpy as np
 
 
 # Define the base year and format the years based on the last two digits in the filename
@@ -9,8 +10,8 @@ def get_file_year(filename):
         year_suffix = int(filename[2:4])  # Extracts the last two digits before "rd"
         if 87 <= year_suffix <= 99:
             year = 1900 + year_suffix  # Files from 1987 to 1999
-        elif 0 <= year_suffix <= 24:
-            year = 2000 + year_suffix  # Files from 2000 to 2024
+        elif 0 <= year_suffix <= 25:
+            year = 2000 + year_suffix  # Files from 2000 to 2025
         else:
             year = None  # Unknown year format
         print(f"File: {filename}, Year extracted: {year}")  # Debugging line
@@ -142,19 +143,21 @@ def process_files(folder_path, output_directory):
                 continue
 
             with open(file_path, 'r') as infile:
+                prev_data = None
                 for line in infile:
                     cleaned_line = clean_line(line)
                     data = cleaned_line.strip().split(',')
+
                     if len(data) == delimiter_count:
                         if file_year <= 2002:
                             if len(data[0]) == 2:
                                 data[0] = '19' + data[0]
-
-                        if file_year <= 2002:
                             data += [None, None, None]
                             data = data[:24] + [data[25], data[24]] + data[26:]
 
-                        combined_data.append(data)
+                        if data != prev_data:  # Only append if different from previous
+                            combined_data.append(data)
+                            prev_data = data
                     else:
                         print(f"Skipped malformed line in {file_name}: {repr(cleaned_line)}")
 
@@ -170,7 +173,11 @@ def process_files(folder_path, output_directory):
         for col in combined_df.columns:
             if col not in ["Year", "Day of Year", "Station Number"]:
                 combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
-
+                combined_df.loc[combined_df[col] == 999, col] = np.nan
+        try:
+            combined_df = combined_df.interpolate(method='linear', limit_direction='both')
+        except Exception as e:
+            print(f"Interpolation skipped due to error: {e}")
         combined_df["Year"] = pd.to_numeric(combined_df["Year"], errors="coerce").astype("Int64")
         combined_df["Day of Year"] = pd.to_numeric(combined_df["Day of Year"], errors="coerce").astype("Int64")
 
@@ -196,6 +203,8 @@ def process_files(folder_path, output_directory):
         output_excel = os.path.join(output_directory, "combined_weather_data.xlsx")
         weekly_output_excel = os.path.join(output_directory, "weekly_aggregated_weather_data_mmwr.xlsx")
 
+        weekly_df.drop(['Day of Year','Year'], axis=1, inplace=True)
+
         combined_df.to_excel(output_excel, index=False)
         weekly_df.to_excel(weekly_output_excel, index=False)
 
@@ -207,6 +216,6 @@ def process_files(folder_path, output_directory):
 
 
 # Specify the folder containing the text files and the output directory
-folder_path = "C:/Users/sarab/Desktop/desktop/Valley Fever/Weather Data MARICOPA(used)/data MARICOPA"
-output_directory = "C:/Users/sarab/Desktop/desktop/Valley Fever/Weather Data MARICOPA (MMWR Weeks)"
+folder_path = "D:/Shared/desktop 3/Valley Fever/Weather Data MARICOPA(used)/data MARICOPA"
+output_directory = "D:/Shared/desktop 3/Valley Fever/Weather Data MARICOPA (MMWR Weeks)/Weather Data MARICOPA (MMWR) Codes/Converted Data"
 process_files(folder_path, output_directory)
