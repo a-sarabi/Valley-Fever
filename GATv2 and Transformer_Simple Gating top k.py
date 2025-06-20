@@ -944,37 +944,38 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     top_n_box = min(10, len(stability_results))
     top_features_box = stability_results.head(top_n_box)['feature_index'].values
     top_data_box = importance_df.loc[top_features_box].T
-    
+
     box_data = [top_data_box.iloc[:, i] for i in range(len(top_features_box))]
-    
-    # Create labels with actual feature names (truncated for display)
-    box_labels = [get_display_name(i, max_length=15) for i in top_features_box]
-    
+
+    # Create labels with actual feature names (print completely)
+    box_labels = [get_full_name(i) for i in top_features_box]
+
     bp = axes[1,0].boxplot(box_data, labels=box_labels, patch_artist=True)
-    
+    axes[1,0].set_xticklabels(box_labels, rotation=45, ha='right', fontsize=10, wrap=True)
+
     # Color boxes based on stability
     cv_values = [stability_results[stability_results['feature_index'] == f]['coefficient_of_variation'].iloc[0] 
                  for f in top_features_box]
-    
+
     # Normalize CV values for color mapping
     if len(cv_values) > 0 and max(cv_values) > 0:
         colors = plt.cm.RdYlGn_r([cv/max(cv_values) for cv in cv_values])
         for patch, color in zip(bp['boxes'], colors):
             patch.set_facecolor(color)
             patch.set_alpha(0.8)
-    
+
     axes[1,0].set_title(f'Distribution of Importance for Top {top_n_box} Features\n(Red = Less Stable, Green = More Stable)', 
                        fontsize=14, fontweight='bold')
     axes[1,0].set_xlabel('Features', fontsize=12)
     axes[1,0].set_ylabel('Importance Score', fontsize=12)
     axes[1,0].tick_params(axis='x', rotation=45, labelsize=10)
-    
+
     # Add a text box with full feature names for the box plot
     full_names_text = "Feature Names:\n" + "\n".join([f"{i+1}. {get_full_name(top_features_box[i])}" 
                                                       for i in range(min(5, len(top_features_box)))])
     if len(top_features_box) > 5:
         full_names_text += f"\n... and {len(top_features_box)-5} more"
-    
+
     axes[1,0].text(0.02, 0.98, full_names_text, transform=axes[1,0].transAxes, 
                    verticalalignment='top', fontsize=8, 
                    bbox=dict(boxstyle="round,pad=0.5", facecolor='lightyellow', alpha=0.8))
@@ -1001,6 +1002,63 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # === NEW: Violinplot for feature importance distribution (top 10 features) ===
+    # Prepare long-form DataFrame for violinplot
+    if lagged_feature_names and 'feature' not in importance_df.columns:
+        importance_df = importance_df.copy()
+        importance_df['feature'] = lagged_feature_names
+    elif 'feature' not in importance_df.columns:
+        importance_df = importance_df.copy()
+        importance_df['feature'] = [f'Feature {i}' for i in range(len(importance_df))]
+
+    # Melt to long-form
+    long_df = importance_df.melt(id_vars='feature', var_name='seed', value_name='importance')
+    # Remove non-numeric seeds (e.g., 'feature' column)
+    long_df = long_df[long_df['seed'].str.startswith('seed_')]
+
+    # Select top 10 features by mean importance
+    if lagged_feature_names:
+        mean_importance = importance_df.drop(columns=['feature']).mean(axis=1)
+    else:
+        mean_importance = importance_df.drop(columns=['feature']).mean(axis=1)
+    top_n_violin = 10
+    top_features_violin = mean_importance.sort_values(ascending=False).head(top_n_violin).index
+    top_feature_names = [importance_df.loc[i, 'feature'] for i in top_features_violin]
+    violin_df = long_df[long_df['feature'].isin(top_feature_names)]
+
+    # Get CV for each top feature for coloring
+    cv_map = dict(zip(stability_results['feature_name'] if 'feature_name' in stability_results.columns else [f'Feature {i}' for i in stability_results['feature_index']],
+                      stability_results['coefficient_of_variation']))
+    # Normalize CVs for color mapping (red=less stable, green=more stable)
+    cv_for_palette = [cv_map[f] for f in top_feature_names]
+    max_cv = max(cv_for_palette) if len(cv_for_palette) > 0 else 1
+    min_cv = min(cv_for_palette) if len(cv_for_palette) > 0 else 0
+    norm_cvs = [(cv-min_cv)/(max_cv-min_cv+1e-8) for cv in cv_for_palette]
+    violin_colors = [plt.cm.RdYlGn_r(norm) for norm in norm_cvs]
+
+    # Create a palette dict for seaborn
+    palette_dict = dict(zip(top_feature_names, violin_colors))
+
+    plt.figure(figsize=(14, 7))
+    ax = sns.violinplot(
+        data=violin_df,
+        x='feature',
+        y='importance',
+        inner='box',
+        fill=True,
+        cut=0,
+        bw_adjust=0.8,
+        palette=palette_dict
+    )
+    plt.xticks(rotation=45, ha='right')
+    plt.title('Feature Importance Distribution Across Seeds (Top 10 Features)\n(Red = Less Stable, Green = More Stable)')
+    plt.xlabel('Feature')
+    plt.ylabel('Importance')
+    plt.tight_layout()
+    violin_save_path = save_path.replace('.png', '_violin.png')
+    plt.savefig(violin_save_path, dpi=300, bbox_inches='tight')
     plt.close()
     
     return fig
@@ -1550,7 +1608,7 @@ if __name__ == '__main__':
                 start_index = 0
                 train_end = 850
                 test_start_index = 900
-                test_end_index = 987
+                test_end_index = 1002
 
                 test_range = range(test_start_index, test_end_index)
                 initial_train_data = data.loc[start_index:train_end]
