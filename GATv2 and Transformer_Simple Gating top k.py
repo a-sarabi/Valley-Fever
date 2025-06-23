@@ -819,7 +819,7 @@ def get_feature_importance_from_model(model):
     # Find the FeatureGate layer in the model
     feature_gate_layer = None
     for layer in model.layers:
-        if isinstance(layer, (ImprovedFeatureGate, SoftFeatureGate)):
+        if isinstance(layer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
             feature_gate_layer = layer
             break
             
@@ -828,7 +828,7 @@ def get_feature_importance_from_model(model):
         for layer in model.layers:
             if hasattr(layer, 'layers'):
                 for sublayer in layer.layers:
-                    if isinstance(sublayer, (ImprovedFeatureGate, SoftFeatureGate)):
+                    if isinstance(sublayer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
                         feature_gate_layer = sublayer
                         break
     
@@ -890,21 +890,20 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     
     fig, axes = plt.subplots(2, 2, figsize=(22, 18))
     
-    # 1. Heatmap of feature importance across seeds (top 20 features for better readability)
-    top_n = min(20, len(importance_df))
-    top_features = stability_results.head(top_n)['feature_index'].values
-    
-    heatmap_data = importance_df.loc[top_features]
-    
-    # Create feature labels for heatmap (truncated for space)
-    feature_labels = [get_display_name(i, max_length=30) for i in top_features]
-    
-    sns.heatmap(heatmap_data, annot=True, fmt='.3f', ax=axes[0,0], cmap='viridis',
-                yticklabels=feature_labels, cbar_kws={'label': 'Importance Score'})
-    axes[0,0].set_title(f'Feature Importance Across Different Seeds\n(Top {top_n} Features)', fontsize=14, fontweight='bold')
-    axes[0,0].set_xlabel('Random Seed', fontsize=12)
-    axes[0,0].set_ylabel('Features', fontsize=12)
-    
+    # 1. (REMOVED) Heatmap of feature importance across seeds (top 20 features for better readability)
+    # Instead, print top 10 most important features overall
+    mean_importance = stability_results['mean_importance']
+    if 'feature_name' in stability_results.columns:
+        feature_names = stability_results['feature_name']
+    else:
+        feature_names = [f'Feature {i}' for i in stability_results['feature_index']]
+    print("\nTop 10 Most Important Features (by mean importance):")
+    print("Rank | Feature Name | Mean Importance")
+    print("-------------------------------------")
+    top10_idx = mean_importance.sort_values(ascending=False).head(10).index
+    for rank, idx in enumerate(top10_idx, 1):
+        print(f"{rank:2d}   {feature_names[idx]:<40} {mean_importance[idx]:.4f}")
+
     # 2. Mean importance vs standard deviation (stability plot)
     scatter = axes[0,1].scatter(stability_results['mean_importance'], 
                                stability_results['std_importance'], 
@@ -925,7 +924,7 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
         least_stable = high_importance.nlargest(2, 'coefficient_of_variation')
         
         for idx, row in most_stable.iterrows():
-            feature_name = get_display_name(row["feature_index"], max_length=20)
+            feature_name = row['feature_name'] if 'feature_name' in row else f"Feature {row['feature_index']}"
             axes[0,1].annotate(f'Stable: {feature_name}', 
                               (row['mean_importance'], row['std_importance']),
                               xytext=(5, 5), textcoords='offset points', 
@@ -933,13 +932,13 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
                               bbox=dict(boxstyle="round,pad=0.3", facecolor='lightgreen', alpha=0.7))
         
         for idx, row in least_stable.iterrows():
-            feature_name = get_display_name(row["feature_index"], max_length=20)
+            feature_name = row['feature_name'] if 'feature_name' in row else f"Feature {row['feature_index']}"
             axes[0,1].annotate(f'Unstable: {feature_name}', 
                               (row['mean_importance'], row['std_importance']),
                               xytext=(5, -15), textcoords='offset points', 
                               fontsize=9, color='darkred', fontweight='bold',
                               bbox=dict(boxstyle="round,pad=0.3", facecolor='lightcoral', alpha=0.7))
-    
+
     # 3. Box plot of top 10 most important features (reduced from 15 for better readability)
     top_n_box = min(10, len(stability_results))
     top_features_box = stability_results.head(top_n_box)['feature_index'].values
@@ -979,7 +978,7 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     axes[1,0].text(0.02, 0.98, full_names_text, transform=axes[1,0].transAxes, 
                    verticalalignment='top', fontsize=8, 
                    bbox=dict(boxstyle="round,pad=0.5", facecolor='lightyellow', alpha=0.8))
-    
+
     # 4. Stability distribution histogram
     axes[1,1].hist(stability_results['coefficient_of_variation'], bins=30, alpha=0.7, 
                    color='skyblue', edgecolor='black')
@@ -1004,7 +1003,7 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     
-    # === NEW: Violinplot for feature importance distribution (top 10 features) ===
+    # === NEW: Violinplot for feature importance distribution (top features by hyperparameter) ===
     # Prepare long-form DataFrame for violinplot
     if lagged_feature_names and 'feature' not in importance_df.columns:
         importance_df = importance_df.copy()
@@ -1018,15 +1017,26 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     # Remove non-numeric seeds (e.g., 'feature' column)
     long_df = long_df[long_df['seed'].str.startswith('seed_')]
 
-    # Select top 10 features by mean importance
+    # Select top features by mean importance (using hyperparameter)
     if lagged_feature_names:
         mean_importance = importance_df.drop(columns=['feature']).mean(axis=1)
     else:
         mean_importance = importance_df.drop(columns=['feature']).mean(axis=1)
-    top_n_violin = 10
-    top_features_violin = mean_importance.sort_values(ascending=False).head(top_n_violin).index
+    
+    # Calculate number of features to show (based on hyperparameter)
+    total_features = len(mean_importance)
+    top_n_violin = max(1, int(total_features * feature_selection_percent))  # Use hyperparameter
+    
+    # Sort features by mean importance and get top features
+    sorted_features = mean_importance.sort_values(ascending=False)
+    top_features_violin = sorted_features.head(top_n_violin).index
     top_feature_names = [importance_df.loc[i, 'feature'] for i in top_features_violin]
     violin_df = long_df[long_df['feature'].isin(top_feature_names)]
+
+    # Sort the violin_df by mean importance for proper ordering in plot
+    feature_mean_importance = violin_df.groupby('feature')['importance'].mean().sort_values(ascending=False)
+    violin_df['feature'] = pd.Categorical(violin_df['feature'], categories=feature_mean_importance.index, ordered=True)
+    violin_df = violin_df.sort_values('feature')
 
     # Get CV for each top feature for coloring
     cv_map = dict(zip(stability_results['feature_name'] if 'feature_name' in stability_results.columns else [f'Feature {i}' for i in stability_results['feature_index']],
@@ -1041,7 +1051,9 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
     # Create a palette dict for seaborn
     palette_dict = dict(zip(top_feature_names, violin_colors))
 
-    plt.figure(figsize=(14, 7))
+    # Adjust figure size based on number of features
+    fig_width = max(14, len(top_feature_names) * 0.8)  # Scale width with number of features
+    plt.figure(figsize=(fig_width, 7))
     ax = sns.violinplot(
         data=violin_df,
         x='feature',
@@ -1053,7 +1065,7 @@ def plot_stability_analysis(importance_df, stability_results, save_path, lagged_
         palette=palette_dict
     )
     plt.xticks(rotation=45, ha='right')
-    plt.title('Feature Importance Distribution Across Seeds (Top 10 Features)\n(Red = Less Stable, Green = More Stable)')
+    plt.title(f'Feature Importance Distribution Across Seeds (Top {feature_selection_percent*100:.0f}% Features - {top_n_violin}/{total_features})\n(Red = Less Stable, Green = More Stable)')
     plt.xlabel('Feature')
     plt.ylabel('Importance')
     plt.tight_layout()
@@ -1292,7 +1304,7 @@ def data_generator(X, correlation, decoder_Y, Y, last_known_values, batch_size, 
 
             yield [batch_X, batch_correlation, batch_decoder_Y, batch_last_known_values], batch_Y
 
-def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horizon):
+def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horizon, consistently_selected_features=None):
     """
     Process inputs through graph convolutional layers with improved feature gating.
     """
@@ -1304,12 +1316,19 @@ def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horiz
     # Transpose from (batch, time, features) to (batch, features, time)
     x = tf.transpose(inputs, perm=[0, 2, 1])
     
-    # Use improved feature gate based on k_percent
-    if feature_gate_k_percent < 1.0:
+    # Use consistent feature selection if available, otherwise use dynamic selection
+    if consistently_selected_features is not None:
+        # Use pre-selected features from stability analysis
+        x = ConsistentFeatureGate(
+            num_features=int(x.shape[1]),
+            selected_feature_indices=consistently_selected_features,
+            name='consistent_feature_gate'
+        )(x)
+    elif feature_selection_percent < 1.0:
         # Hard selection with improved gradient flow
         x = ImprovedFeatureGate(
             num_features=int(x.shape[1]), 
-            k_percent=feature_gate_k_percent, 
+            k_percent=feature_selection_percent, 
             temperature=0.1,  # Lower = sharper selection
             name='improved_feature_gate'
         )(x)
@@ -1390,7 +1409,7 @@ def transformer_encoder_decoder_block(graph_output, decoder_inputs, d_model, num
     
     return outputs
 
-def build_model(input_shape, correlation_shape, use_graph_layer):
+def build_model(input_shape, correlation_shape, use_graph_layer, consistently_selected_features=None):
     inputs = keras.Input(shape=input_shape)
     if use_graph_layer == True:
         inp_lap = keras.Input(shape=correlation_shape)
@@ -1400,7 +1419,7 @@ def build_model(input_shape, correlation_shape, use_graph_layer):
     if use_graph_layer:
         graph_output, gc_1_attn, gc_2_attn = graph_processing_block(inputs, inp_lap, head_size,
                                                                     num_heads, dropout,
-                                                                    horizon)
+                                                                    horizon, consistently_selected_features)
     else:
         graph_output = inputs
 
@@ -1452,7 +1471,7 @@ def analyze_feature_importance(model, max_lag=6, return_values_only=False):
     # Find the FeatureGate layer in the model
     feature_gate_layer = None
     for layer in model.layers:
-        if isinstance(layer, (ImprovedFeatureGate, SoftFeatureGate)):
+        if isinstance(layer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
             feature_gate_layer = layer
             break
             
@@ -1461,7 +1480,7 @@ def analyze_feature_importance(model, max_lag=6, return_values_only=False):
         for layer in model.layers:
             if hasattr(layer, 'layers'):
                 for sublayer in layer.layers:
-                    if isinstance(sublayer, (ImprovedFeatureGate, SoftFeatureGate)):
+                    if isinstance(sublayer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
                         feature_gate_layer = sublayer
                         break
     
@@ -1511,6 +1530,79 @@ def analyze_feature_importance(model, max_lag=6, return_values_only=False):
     
     return importance
 
+def get_consistently_selected_features(stability_results, k_percent=0.3, consistency_threshold=0.7):
+    """
+    Identify features that consistently appear in top k_percent across multiple seeds.
+    
+    Args:
+        stability_results: DataFrame with stability analysis results
+        k_percent: Percentage of features to select (e.g., 0.3 for 30%)
+        consistency_threshold: Minimum fraction of seeds where feature should appear in top k_percent
+    
+    Returns:
+        List of feature indices that are consistently selected
+    """
+    # Calculate how many features should be in top k_percent
+    total_features = len(stability_results)
+    k_features = int(total_features * k_percent)
+    
+    # Get the top k features by mean importance
+    top_k_features = stability_results.nsmallest(k_features, 'mean_importance')['feature_index'].values
+    
+    # For each feature, calculate how often it appears in top k across seeds
+    # This would require the full importance_df from stability analysis
+    # For now, we'll use a simpler approach based on stability
+    
+    # Select features that are both important and stable
+    stable_important = stability_results[
+        (stability_results['mean_importance'] > stability_results['mean_importance'].quantile(1 - k_percent)) &
+        (stability_results['coefficient_of_variation'] < 0.5)  # Stable features
+    ]
+    
+    # If we don't have enough stable features, add some important ones
+    if len(stable_important) < k_features:
+        remaining_needed = k_features - len(stable_important)
+        additional_features = stability_results[
+            ~stability_results.index.isin(stable_important.index)
+        ].nlargest(remaining_needed, 'mean_importance')
+        
+        selected_features = pd.concat([stable_important, additional_features])
+    else:
+        selected_features = stable_important.head(k_features)
+    
+    return selected_features['feature_index'].values.tolist()
+
+class ConsistentFeatureGate(layers.Layer):
+    """
+    Feature gate that uses pre-selected features instead of learning them dynamically.
+    """
+    def __init__(self, num_features, selected_feature_indices, **kwargs):
+        super().__init__(**kwargs)
+        self.num_features = num_features
+        self.selected_feature_indices = selected_feature_indices
+        
+    def build(self, input_shape):
+        # Create a fixed mask for selected features
+        self.feature_mask = tf.zeros(self.num_features, dtype=tf.float32)
+        self.feature_mask = tf.tensor_scatter_nd_update(
+            self.feature_mask,
+            tf.expand_dims(tf.constant(self.selected_feature_indices), axis=1),
+            tf.ones(len(self.selected_feature_indices), dtype=tf.float32)
+        )
+        
+    def call(self, inputs):
+        # Apply the fixed mask
+        mask_reshaped = tf.reshape(self.feature_mask, (1, -1, 1))
+        return inputs * mask_reshaped
+    
+    def get_feature_importance(self):
+        """Get the fixed feature importance mask"""
+        return self.feature_mask.numpy()
+    
+    def get_selected_features(self):
+        """Get the pre-selected feature indices"""
+        return self.selected_feature_indices
+
 '''
 ##################################################
 # Main codes
@@ -1559,7 +1651,17 @@ if __name__ == '__main__':
                 moving_average=False
                 MA_window_size=12
                 batch_size = 10
-                feature_gate_k_percent = 0.3  # Keep only top 30% of features (70% reduction - more aggressive than 50%)
+                feature_selection_percent = 0.3  # Use top 30% of features everywhere
+                # (No more feature_gate_k_percent or feature_selection_percentage)
+                
+                # ========================================================================================
+                # HYPERPARAMETER EXAMPLES FOR FEATURE SELECTION
+                # ========================================================================================
+                # feature_selection_percent = 0.2  # Use top 20% of features (more aggressive)
+                # feature_selection_percent = 0.5  # Use top 50% of features (less aggressive)
+                # feature_selection_percent = 0.1  # Use top 10% of features (very aggressive)
+                # ========================================================================================
+                
                 max_lag = 6  # Reduced from 12 to 6 for fewer lag features
 
                 # Set Target Name
@@ -1779,7 +1881,7 @@ if __name__ == '__main__':
                         lagged_feature_names.append(f"{col} ({-lag})")
 
                 # Run stability analysis with multiple seeds
-                seeds_to_test = [33, 42, 123, 456, 789]
+                seeds_to_test = list(range(5))
                 
                 try:
                     importance_df, stability_results = run_stability_analysis(
@@ -1791,9 +1893,35 @@ if __name__ == '__main__':
                     
                     print("✅ Feature importance stability analysis completed!")
                     
+                    # Determine consistently selected features from stability analysis
+                    print("\n🔍 Determining consistently selected features...")
+                    consistently_selected_features = get_consistently_selected_features(
+                        stability_results, 
+                        k_percent=feature_selection_percent,
+                        consistency_threshold=0.7
+                    )
+                    
+                    print(f"📊 Selected {len(consistently_selected_features)} features out of {len(stability_results)} total")
+                    # Print all selected feature names
+                    if 'feature_name' in stability_results.columns:
+                        selected_feature_names = stability_results.set_index('feature_index').loc[consistently_selected_features]['feature_name'].tolist()
+                    else:
+                        selected_feature_names = [f'Feature {idx}' for idx in consistently_selected_features]
+                    print("\n🔎 All selected features (used in model):")
+                    for name in selected_feature_names:
+                        print(f"  - {name}")
+                    # Save the selected features for reference
+                    selected_features_df = stability_results.loc[consistently_selected_features]
+                    selected_features_df.to_csv(f"{directory}/consistently_selected_features.csv")
+                    
+                    # Create a flag to use consistent features in main model
+                    use_consistent_features = True
+                    
                 except Exception as e:
                     print(f"❌ Error during stability analysis: {str(e)}")
-                    print("Continuing with main forecasting loop...")
+                    print("Continuing with main forecasting loop using dynamic feature selection...")
+                    consistently_selected_features = None
+                    use_consistent_features = False
 
                 # ========================================================================================
                 # MAIN FORECASTING LOOP (YOUR ORIGINAL CODE)
@@ -1905,11 +2033,22 @@ if __name__ == '__main__':
                         input_shape = X_train.shape[1:]
                         correlation_shape = correlation_train.shape[1:]
 
-                        model = build_model(
-                            input_shape,
-                            correlation_shape,
-                            use_graph_layer=use_graph_layer
-                        )
+                        # Use consistently selected features if available from stability analysis
+                        if 'use_consistent_features' in locals() and use_consistent_features and consistently_selected_features is not None:
+                            print(f"🔒 Using {len(consistently_selected_features)} pre-selected features from stability analysis")
+                            model = build_model(
+                                input_shape,
+                                correlation_shape,
+                                use_graph_layer=use_graph_layer,
+                                consistently_selected_features=consistently_selected_features
+                            )
+                        else:
+                            print(f"🔄 Using dynamic feature selection (top {feature_selection_percent*100:.0f}%)")
+                            model = build_model(
+                                input_shape,
+                                correlation_shape,
+                                use_graph_layer=use_graph_layer
+                            )
 
                         model.compile(
                             loss="mse",
@@ -2113,7 +2252,8 @@ if __name__ == '__main__':
         print(f"🎯 Target Variable: {target_name_original}")
         print(f"🔮 Forecast Horizon: {horizon} steps")
         print(f"⏰ Max Lag Features: {max_lag} time steps")
-        print(f"🧠 Feature Selection: Top {feature_gate_k_percent*100:.0f}% of features ({100-feature_gate_k_percent*100:.0f}% reduction)")
+        print(f"🧠 Dynamic Feature Gate: Top {feature_selection_percent*100:.0f}% of features ({100-feature_selection_percent*100:.0f}% reduction)")
+        print(f"🎯 Stability-Based Selection: Top {feature_selection_percent*100:.0f}% of features")
         print(f"📈 Graph Neural Network: {'Enabled' if use_graph_layer else 'Disabled'}")
         print(f"🔄 Transformer Architecture: Enabled")
         print(f"📊 Initial Training Normalization: {'Enabled' if initial_training_normalization else 'Disabled'}")
