@@ -1414,7 +1414,7 @@ if __name__ == '__main__':
 
         # Store results for each horizon
         horizon_results = {}
-        seeds_to_test = list(range(2))  # You can adjust this
+        seeds_to_test = list(range(100))  # You can adjust this
 
         for horizon in horizons_to_analyze:
             print(f"\n🔄 Analyzing Horizon: {horizon} weeks")

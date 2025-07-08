@@ -1310,4 +1310,4 @@ if __name__ == '__main__':
     print("🎉 Multi-horizon forecasting script completed!")
     print("="*80)
 print(f"\n🎉 All analysis completed!")
-print(f"📂 Check results in directory: {main_directory}/")
+print(f"📂 Check results in directory: {analysis_results_directory}/")
