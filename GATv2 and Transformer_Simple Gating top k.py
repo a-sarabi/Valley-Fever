@@ -1,12 +1,13 @@
-import seaborn as sns
 import os
-GPU_ID="0"
+
+GPU_ID = "0"
 os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
 import gc
 from tensorflow.keras.backend import clear_session
 
 print(os.environ['PATH'])
 from tensorflow.python.client import device_lib
+
 print(device_lib.list_local_devices())
 import os
 import openpyxl
@@ -39,6 +40,7 @@ from tensorflow.keras.regularizers import l2
 from collections import defaultdict
 import re
 
+
 # =====================================================================================
 # YOUR EXISTING CLASSES AND FUNCTIONS (keeping all original code)
 # =====================================================================================
@@ -48,6 +50,7 @@ class PositionalEmbedding(layers.Layer):
     """
     Adds positional embeddings to the input embeddings.
     """
+
     def __init__(self, max_sequence_length, d_model, **kwargs):
         super().__init__(**kwargs)
         self.token_embeddings = layers.Dense(d_model)  # Linear projection to d_model dimension
@@ -63,12 +66,13 @@ class PositionalEmbedding(layers.Layer):
         # Ensure positions don't exceed max_sequence_length
         positions = tf.range(start=0, limit=seq_len, delta=1)
         positions = tf.minimum(positions, self.max_sequence_length - 1)
-        
+
         embedded_tokens = self.token_embeddings(x)  # (batch_size, seq_len, d_model)
         embedded_positions = self.pos_embeddings(positions)  # (seq_len, d_model)
-        
+
         # Add positional embeddings to token embeddings
         return embedded_tokens + embedded_positions
+
 
 # Create a look-ahead mask for decoder self-attention
 def create_look_ahead_mask(size):
@@ -79,11 +83,13 @@ def create_look_ahead_mask(size):
     mask_4d = mask_2d[tf.newaxis, tf.newaxis, :, :]
     return mask_4d  # Shape: (1, 1, size, size)
 
+
 # Add Transformer Encoder Block
 class TransformerEncoder(layers.Layer):
     """
     Transformer Encoder block with multi-head attention and feed-forward network.
     """
+
     def __init__(self, d_model, num_heads, ff_dim, dropout=0.1, **kwargs):
         super().__init__(**kwargs)
         # Self-attention
@@ -101,7 +107,7 @@ class TransformerEncoder(layers.Layer):
     def call(self, x, training=False, mask=None):
         # Self Attention
         attn_output, _ = self.mha(
-            query=x, value=x, key=x, 
+            query=x, value=x, key=x,
             attention_mask=mask,
             return_attention_scores=True
         )
@@ -115,11 +121,13 @@ class TransformerEncoder(layers.Layer):
 
         return out2
 
+
 # Add Transformer Decoder Block
 class TransformerDecoder(layers.Layer):
     """
     Transformer Decoder block with masked self-attention, cross-attention and feed-forward network.
     """
+
     def __init__(self, d_model, num_heads, ff_dim, dropout=0.1, **kwargs):
         super().__init__(**kwargs)
         # Self-attention (decoder-side)
@@ -143,10 +151,10 @@ class TransformerDecoder(layers.Layer):
         target_seq_len = tf.shape(x)[1]
         if look_ahead_mask is None:
             look_ahead_mask = create_look_ahead_mask(target_seq_len)
-            
+
         # 1) Masked self-attention
         attn1, attn_weights_1 = self.self_mha(
-            query=x, value=x, key=x, 
+            query=x, value=x, key=x,
             attention_mask=look_ahead_mask,
             return_attention_scores=True
         )
@@ -169,6 +177,7 @@ class TransformerDecoder(layers.Layer):
 
         return out3
 
+
 # IMPROVED FEATURE GATE WITH BETTER GRADIENT FLOW
 class ImprovedFeatureGate(layers.Layer):
     def __init__(self, num_features, k_percent=0.5, temperature=1.0, **kwargs):
@@ -189,14 +198,14 @@ class ImprovedFeatureGate(layers.Layer):
     def call(self, inputs, training=None):
         # Convert logits to importance probabilities
         importance_scores = tf.nn.sigmoid(self.logits)
-        
+
         if training:
             # SOFT GATING during training - better gradient flow
             soft_gates = tf.nn.sigmoid(self.logits / self.temperature)
             threshold = tf.nn.top_k(soft_gates, k=int(self.num_features * self.k_percent))[0][-1]
             soft_gates = tf.nn.sigmoid((soft_gates - threshold) / self.temperature)
             gates_reshaped = tf.reshape(soft_gates, (1, -1, 1))
-            
+
         else:
             # HARD GATING during inference - actual top-k selection
             k = tf.cast(tf.math.ceil(self.k_percent * tf.cast(self.num_features, tf.float32)), tf.int32)
@@ -209,20 +218,21 @@ class ImprovedFeatureGate(layers.Layer):
             )
             hard_gates = importance_scores * mask
             gates_reshaped = tf.reshape(hard_gates, (1, -1, 1))
-        
+
         # Apply gating to inputs
         return inputs * gates_reshaped
-    
+
     def get_feature_importance(self):
         """Get current feature importance scores"""
         return tf.nn.sigmoid(self.logits).numpy()
-    
+
     def get_selected_features(self):
         """Get indices of top-k features"""
         importance = tf.nn.sigmoid(self.logits)
         k = tf.cast(tf.math.ceil(self.k_percent * tf.cast(self.num_features, tf.float32)), tf.int32)
         _, top_k_indices = tf.nn.top_k(importance, k=k)
         return top_k_indices.numpy()
+
 
 # Alternative simpler approach - Learnable feature weights without hard selection
 class SoftFeatureGate(layers.Layer):
@@ -244,20 +254,22 @@ class SoftFeatureGate(layers.Layer):
         normalized_weights = tf.nn.sigmoid(self.feature_weights)
         weights_reshaped = tf.reshape(normalized_weights, (1, -1, 1))
         return inputs * weights_reshaped
-    
+
     def get_feature_importance(self):
         """Get current feature importance scores"""
         return tf.nn.sigmoid(self.feature_weights).numpy()
+
 
 class ConsistentFeatureGate(layers.Layer):
     """
     Feature gate that uses pre-selected features instead of learning them dynamically.
     """
+
     def __init__(self, num_features, selected_feature_indices, **kwargs):
         super().__init__(**kwargs)
         self.num_features = num_features
         self.selected_feature_indices = selected_feature_indices
-        
+
     def build(self, input_shape):
         # Create a fixed mask for selected features
         self.feature_mask = tf.zeros(self.num_features, dtype=tf.float32)
@@ -266,19 +278,20 @@ class ConsistentFeatureGate(layers.Layer):
             tf.expand_dims(tf.constant(self.selected_feature_indices), axis=1),
             tf.ones(len(self.selected_feature_indices), dtype=tf.float32)
         )
-        
+
     def call(self, inputs):
         # Apply the fixed mask
         mask_reshaped = tf.reshape(self.feature_mask, (1, -1, 1))
         return inputs * mask_reshaped
-    
+
     def get_feature_importance(self):
         """Get the fixed feature importance mask"""
         return self.feature_mask.numpy()
-    
+
     def get_selected_features(self):
         """Get the pre-selected feature indices"""
         return self.selected_feature_indices
+
 
 class ReverseDifferencingLayer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
@@ -292,6 +305,7 @@ class ReverseDifferencingLayer(tf.keras.layers.Layer):
         # Use tf.cumsum to reverse the differencing, adding the last known value as the base.
         reversed_preds = tf.cumsum(preds, axis=1) + last_known_value
         return reversed_preds
+
 
 # =====================================================================================
 # YOUR EXISTING FUNCTIONS (keeping all original functions)
@@ -307,7 +321,7 @@ def data_preprocess(df, diff_order, start_index, end_index, moving_average, MA_w
     # Apply differencing according to the specified diff_order
     df_diff = df.copy()
     for _ in range(diff_order):
-        if moving_average==True:
+        if moving_average == True:
             # Function to pad the beginning of the DataFrame
             def pad_head(df, pad_width):
                 head = pd.DataFrame([df.iloc[0].values] * pad_width, columns=df.columns)
@@ -338,6 +352,7 @@ def data_preprocess(df, diff_order, start_index, end_index, moving_average, MA_w
     df_diff = df_diff.loc[start_index + diff_order:end_index]
 
     return df, df_diff
+
 
 def data_set_generation(data, data_diff, max_lag, target_as_feature, target_name):
     # update the input_components list
@@ -388,11 +403,12 @@ def data_set_generation(data, data_diff, max_lag, target_as_feature, target_name
 
     return new_data, new_data_diff, target_comp_updated_list, target_name
 
+
 def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, stride, use_graph_layer,
-                  save_instance,ignore_first_instance_stride, save_x_seq, save_y_seq, save_correlation_seq,
+                  save_instance, ignore_first_instance_stride, save_x_seq, save_y_seq, save_correlation_seq,
                   save_decoder_y_seq, save_last_known_values, target_name,
-                  target_as_feature, target_comp_updated_list, differenced_target, differenced_X, moving_average,MA_window_size):
-    
+                  target_as_feature, target_comp_updated_list, differenced_target, differenced_X, moving_average,
+                  MA_window_size):
     if differenced_X == True:
         X = data_diff_
     else:
@@ -427,7 +443,7 @@ def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, strid
         corr = np.where(np.abs(corr) > 0.05, corr, 0)
         correlation_seq.append(corr)
 
-    for instance in range(save_instance, len(X) - sequence_length - horizon +1, stride):
+    for instance in range(save_instance, len(X) - sequence_length - horizon + 1, stride):
         if ignore_first_instance_stride:
             ignore_first_instance_stride = False
             continue
@@ -437,11 +453,12 @@ def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, strid
         if Y_sequence == True:
             y_seq.append(Y_original[instance + sequence_length:instance + sequence_length + horizon])
         else:
-            y_seq.append(np.expand_dims(np.sum(Y_original[instance + sequence_length:instance + sequence_length + horizon], axis=0), axis=0))
+            y_seq.append(np.expand_dims(
+                np.sum(Y_original[instance + sequence_length:instance + sequence_length + horizon], axis=0), axis=0))
 
         decoder_y_seq.append(Y[instance + sequence_length - horizon:instance + sequence_length])
 
-        if moving_average==True:
+        if moving_average == True:
             last_value_before_sequence = data_[target_name].iloc[max(0,
                                                                      instance + sequence_length - diff_order + 2 - MA_window_size):instance + sequence_length - diff_order + 2].mean()
         else:
@@ -458,6 +475,7 @@ def preprocessing(data_, data_diff_, diff_order, sequence_length, horizon, strid
     save_correlation_seq.extend(correlation_seq)
 
     return save_instance, save_x_seq, save_y_seq, save_decoder_y_seq, save_correlation_seq, save_last_known_values
+
 
 def data_generator(X, correlation, decoder_Y, Y, last_known_values, batch_size, new_data_ratio=0.1):
     while True:
@@ -481,22 +499,24 @@ def data_generator(X, correlation, decoder_Y, Y, last_known_values, batch_size, 
                 else:
                     batch_correlation = correlation[combined_indices]
             else:
-                batch_correlation=[]
+                batch_correlation = []
 
             yield [batch_X, batch_correlation, batch_decoder_Y, batch_last_known_values], batch_Y
 
-def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horizon, consistently_selected_features=None):
+
+def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horizon,
+                           consistently_selected_features=None):
     """
     Process inputs through graph convolutional layers with improved feature gating.
     """
     l2_reg = 2.5e-4  # L2 regularization rate
-    
+
     # Save original sequence length for reshaping later
     batch_size, original_seq_len, n_features = tf.shape(inputs)[0], tf.shape(inputs)[1], tf.shape(inputs)[2]
-    
+
     # Transpose from (batch, time, features) to (batch, features, time)
     x = tf.transpose(inputs, perm=[0, 2, 1])
-    
+
     # Use consistent feature selection if available, otherwise use dynamic selection
     feature_selection_percent = 0.1  # Set this based on your global setting
     if consistently_selected_features is not None:
@@ -507,8 +527,8 @@ def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horiz
         )(x)
     elif feature_selection_percent < 1.0:
         x = ImprovedFeatureGate(
-            num_features=int(x.shape[1]), 
-            k_percent=feature_selection_percent, 
+            num_features=int(x.shape[1]),
+            k_percent=feature_selection_percent,
             temperature=0.1,
             name='improved_feature_gate'
         )(x)
@@ -517,9 +537,9 @@ def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horiz
             num_features=int(x.shape[1]),
             name='soft_feature_gate'
         )(x)
-    
+
     do_1 = Dropout(dropout)(x)
-    
+
     # GAT operates on the node/feature dimension
     gc_1, gc_1_attn = GATv2Conv(
         int(math.ceil(x.shape[2])),
@@ -532,58 +552,61 @@ def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horiz
         bias_regularizer=l2(l2_reg),
         return_attn_coef=True,
     )([do_1, inp_lap])
-    
+
     # Transpose back to (batch, time, features)
     graph_output = tf.transpose(gc_1, perm=[0, 2, 1])
-    
+
     gc_2_attn = gc_1_attn
-    
+
     return graph_output, gc_1_attn, gc_2_attn
 
-def transformer_encoder_decoder_block(graph_output, decoder_inputs, d_model, num_heads, ff_dim, horizon, target_name, dropout):
+
+def transformer_encoder_decoder_block(graph_output, decoder_inputs, d_model, num_heads, ff_dim, horizon, target_name,
+                                      dropout):
     """
     Transformer-based encoder-decoder block for time series forecasting.
     """
     l2_reg = 2.5e-4  # L2 regularization rate
-    
+
     sequence_length = tf.shape(graph_output)[1]
     max_encoder_length = 200  # Maximum possible sequence length
-    
+
     # Add positional embeddings to encoder input
     encoder_embedding = PositionalEmbedding(max_sequence_length=max_encoder_length, d_model=d_model)
     enc_emb = encoder_embedding(graph_output)
-    
+
     # Encoder stacks (2 layers)
     encoder_output = enc_emb
     for i in range(2):
         encoder_block = TransformerEncoder(d_model, num_heads, ff_dim, dropout=dropout)
         encoder_output = encoder_block(encoder_output)
-    
+
     # Create look-ahead mask for decoder
     look_ahead_mask = create_look_ahead_mask(horizon)
-    
+
     # Add positional embeddings to decoder input
     decoder_embedding = PositionalEmbedding(max_sequence_length=horizon, d_model=d_model)
     dec_emb = decoder_embedding(decoder_inputs)
-    
+
     # Decoder stacks (2 layers)
     decoder_output = dec_emb
     for i in range(2):
         decoder_block = TransformerDecoder(d_model, num_heads, ff_dim, dropout=dropout)
         decoder_output = decoder_block(
-            decoder_output, 
+            decoder_output,
             encoder_output,
             look_ahead_mask=look_ahead_mask
         )
-    
+
     # Final output layer
     Y_sequence = True  # Set this based on your original setting
     if Y_sequence == True:
         outputs = keras.layers.TimeDistributed(keras.layers.Dense(len(target_name)))(decoder_output)
     else:
         outputs = keras.layers.Dense(len(target_name))(decoder_output[:, -1:, :])
-    
+
     return outputs
+
 
 def build_model(input_shape, correlation_shape, use_graph_layer, consistently_selected_features=None):
     inputs = keras.Input(shape=input_shape)
@@ -610,7 +633,7 @@ def build_model(input_shape, correlation_shape, use_graph_layer, consistently_se
     # Project to consistent dimension for transformer if needed
     d_model = 256  # Transformer embedding dimension
     graph_output = layers.Dense(d_model)(graph_output)
-    
+
     # Create decoder inputs
     decoder_inputs = tf.keras.Input(
         shape=(horizon, len(target_name)), name='decoder_inputs')
@@ -628,7 +651,7 @@ def build_model(input_shape, correlation_shape, use_graph_layer, consistently_se
     )
 
     last_known_value_input = tf.keras.Input(shape=(1, len(target_name)), name='last_known_values')
-    
+
     differenced_target = True  # Set this based on your original setting
     if differenced_target == True:
         outputs = ReverseDifferencingLayer()([outputs, last_known_value_input])
@@ -646,8 +669,9 @@ def build_model(input_shape, correlation_shape, use_graph_layer, consistently_se
 
     return model
 
+
 # =====================================================================================
-# FORECASTING FUNCTIONS (missing from previous code)
+# FORECASTING FUNCTIONS
 # =====================================================================================
 
 def CORR(flattened_actual, flattened_forecast):
@@ -665,12 +689,14 @@ def CORR(flattened_actual, flattened_forecast):
     valid_indices = (sigma_g != 0) and (sigma_p != 0)
     if np.any(valid_indices):
         correlation = np.mean(
-            ((flattened_forecast[valid_indices] - mean_p) * (flattened_actual[valid_indices] - mean_g)) / (sigma_p * sigma_g)
+            ((flattened_forecast[valid_indices] - mean_p) * (flattened_actual[valid_indices] - mean_g)) / (
+                        sigma_p * sigma_g)
         )
     else:
         correlation = 0
 
     return correlation
+
 
 def RSE(flattened_actual, flattened_forecast):
     """
@@ -690,36 +716,37 @@ def RSE(flattened_actual, flattened_forecast):
 
     return rse
 
+
 def get_consistently_selected_features(stability_results, k_percent=0.1, consistency_threshold=0.7):
     """
     Identify features that consistently appear in top k_percent across multiple seeds.
     """
     total_features = len(stability_results)
     k_features = int(total_features * k_percent)
-    
+
     # Select features that are both important and stable
     stable_important = stability_results[
         (stability_results['mean_importance'] > stability_results['mean_importance'].quantile(1 - k_percent)) &
         (stability_results['coefficient_of_variation'] < 0.5)  # Stable features
-    ]
-    
+        ]
+
     # If we don't have enough stable features, add some important ones
     if len(stable_important) < k_features:
         remaining_needed = k_features - len(stable_important)
         additional_features = stability_results[
             ~stability_results.index.isin(stable_important.index)
         ].nlargest(remaining_needed, 'mean_importance')
-        
+
         selected_features = pd.concat([stable_important, additional_features])
     else:
         selected_features = stable_important.head(k_features)
-    
+
     return selected_features['feature_index'].values.tolist()
 
-def final_prediction(x_seq, Y_scaler, scaler2, decoder_Y_seq, last_known_values, correlation_seq, 
-                    sequence_length, horizon, model, data, stride, target_name, differenced_target, 
-                    diff_order, save_dict):
 
+def final_prediction(x_seq, Y_scaler, scaler2, decoder_Y_seq, last_known_values, correlation_seq,
+                     sequence_length, horizon, model, data, stride, target_name, differenced_target,
+                     diff_order, save_dict):
     x_seq = np.expand_dims(x_seq[-1], axis=0)
     decoder_Y_seq = np.expand_dims(decoder_Y_seq[-1], axis=0)
     last_known_values = np.expand_dims(last_known_values[-1], axis=0)
@@ -750,7 +777,9 @@ def final_prediction(x_seq, Y_scaler, scaler2, decoder_Y_seq, last_known_values,
     if Y_sequence == True:
         if normalized_data == True:
             if reverse_normalization == True:
-                actual_array = np.expand_dims(Y_scaler.inverse_transform(data[target_name].values[indices[-1, None] + np.arange(horizon)]), axis=0)
+                actual_array = np.expand_dims(
+                    Y_scaler.inverse_transform(data[target_name].values[indices[-1, None] + np.arange(horizon)]),
+                    axis=0)
             else:
                 actual_array = np.expand_dims(data[target_name].values[indices[-1, None] + np.arange(horizon)], axis=0)
         else:
@@ -765,6 +794,7 @@ def final_prediction(x_seq, Y_scaler, scaler2, decoder_Y_seq, last_known_values,
         datetime_index = data.index.to_numpy()[indices[-1, None] + horizon - 1]
 
     return actual_array, y_pred_rev, datetime_index, y_pred
+
 
 def plot_prediction_graph(original_y, forecast_list, test_boundary, horizon, Test_KPI, iter, save_dict):
     plt.figure(figsize=(15, 10))
@@ -787,19 +817,20 @@ def plot_prediction_graph(original_y, forecast_list, test_boundary, horizon, Tes
     plt.savefig("{}/prediction_{}_it={}.png".format(save_dict, horizon, iter + 1), dpi=300)
     plt.close()
 
-def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_features, main_directory, 
-                               target_name_original, max_lag, diff_order):
+
+def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_features, main_directory,
+                                target_name_original, max_lag, diff_order):
     """
     Run the actual forecasting loop for a specific horizon using consistently selected features
     """
-    
+
     print(f"\n🔮 Running forecasting for horizon: {horizon} weeks")
-    
+
     # Create horizon-specific forecasting directory
     forecasting_dir = f"{main_directory}/forecasting_horizon_{horizon}"
     if not os.path.exists(forecasting_dir):
         os.makedirs(forecasting_dir)
-    
+
     # Set parameters based on horizon
     sequence_length = 3 * horizon
     stride = 1
@@ -816,32 +847,32 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
     moving_average = False
     MA_window_size = 12
     batch_size = 10
-    
+
     # Model parameters
     head_size = 16
     num_heads = 8
     ff_dim = 256
     dropout = 0.05
-    
+
     # Test parameters
     start_index = 0
     train_end = 850
     test_start_index = 900
     test_end_index = 1002
     test_range = range(test_start_index, test_end_index)
-    
+
     # Create Excel file for results
     now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_filename = f"{forecasting_dir}/dynamic_results_{horizon}week_{now}.xlsx"
-    
+
     if not os.path.exists(output_filename):
         wb = openpyxl.Workbook()
         sheet = wb.active
-        new_row = ['iteration', 'prediction_date', 'actual_value', 'forecast_value', 
-                  'Test_MAPE', 'Test_MAE', 'Test_MSE', 'Test_CORR', 'Test_RSE']
+        new_row = ['iteration', 'prediction_date', 'actual_value', 'forecast_value',
+                   'Test_MAPE', 'Test_MAE', 'Test_MSE', 'Test_CORR', 'Test_RSE']
         sheet.append(new_row)
         wb.save(output_filename)
-    
+
     # Initialize variables
     forecast_list = []
     actual_list = []
@@ -856,7 +887,7 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
     save_last_known_values = []
     run_first_time = True
     model_weights_update_iter = int(round(0.2 * len(data))) + 1
-    
+
     # Setup normalization
     initial_train_data = data.loc[start_index:train_end]
     if initial_training_normalization and normalized_data:
@@ -867,18 +898,18 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
     else:
         scaler2 = StandardScaler()
         Y_scaler = scaler2.fit(initial_train_data[target_name_original])
-    
+
     iter = horizon - 1
     if ignore_weights == False:
         iter = 2619
-    
+
     # Start forecasting loop
     buffered_rows = []
     save_to_excel_iter = 10
-    
+
     for end_index in test_range[iter:]:
         print("##################### run # {} / end index: {} ########################### ".format(iter, end_index))
-        
+
         SEED = 33
         tf.random.set_seed(SEED)
         os.environ['PYTHONHASHSEED'] = str(SEED)
@@ -907,11 +938,13 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
         else:
             df_norm_local = df_norm.loc[start_index:end_index]
 
-        data_norm, data_diff = data_preprocess(df_norm_local, diff_order, start_index, end_index, moving_average, MA_window_size)
+        data_norm, data_diff = data_preprocess(df_norm_local, diff_order, start_index, end_index, moving_average,
+                                               MA_window_size)
 
         # Generate lagged variables
         data_norm, data_diff, target_comp_updated_list, target_name = data_set_generation(
-            data_norm, data_diff, max_lag=max_lag, target_as_feature=target_as_feature, target_name=target_name_original)
+            data_norm, data_diff, max_lag=max_lag, target_as_feature=target_as_feature,
+            target_name=target_name_original)
 
         save_instance, save_x_seq, save_y_seq, save_decoder_y_seq, save_correlation_seq, save_last_known_values = preprocessing(
             data_=data_norm, data_diff_=data_diff, diff_order=diff_order, sequence_length=sequence_length,
@@ -920,7 +953,7 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
             save_correlation_seq=save_correlation_seq, save_decoder_y_seq=save_decoder_y_seq,
             save_last_known_values=save_last_known_values, target_name=target_name,
             target_as_feature=target_as_feature, target_comp_updated_list=target_comp_updated_list,
-            differenced_target=differenced_target, differenced_X=differenced_X, moving_average=moving_average, 
+            differenced_target=differenced_target, differenced_X=differenced_X, moving_average=moving_average,
             MA_window_size=MA_window_size
         )
 
@@ -930,15 +963,16 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
         if repeat_corr == True:
             X_train, X_test, Y_train, Y_test, decoder_Y_train, decoder_Y_test, last_known_values_train, last_known_values_test = \
                 train_test_split(np.asarray(save_x_seq), np.asarray(save_y_seq), np.asarray(save_decoder_y_seq),
-                               np.asarray(save_last_known_values), test_size=dynamic_test_size, shuffle=False, random_state=1004)
+                                 np.asarray(save_last_known_values), test_size=dynamic_test_size, shuffle=False,
+                                 random_state=1004)
 
             correlation_train = np.array(save_correlation_seq)
             correlation_test = correlation_train
         else:
             X_train, X_test, Y_train, Y_test, decoder_Y_train, decoder_Y_test, last_known_values_train, last_known_values_test, correlation_train, correlation_test = \
                 train_test_split(np.asarray(save_x_seq), np.asarray(save_y_seq), np.asarray(save_decoder_y_seq),
-                               np.asarray(save_last_known_values), np.asarray(save_correlation_seq),
-                               test_size=dynamic_test_size, shuffle=False, random_state=1004)
+                                 np.asarray(save_last_known_values), np.asarray(save_correlation_seq),
+                                 test_size=dynamic_test_size, shuffle=False, random_state=1004)
 
         ignore_first_instance_stride = True
 
@@ -950,15 +984,15 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
             # Use consistently selected features from stability analysis
             print(f"🔒 Using {len(consistently_selected_features)} pre-selected features from stability analysis")
             model = build_model(input_shape, correlation_shape, use_graph_layer=use_graph_layer,
-                              consistently_selected_features=consistently_selected_features)
+                                consistently_selected_features=consistently_selected_features)
 
             model.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                         metrics=[tf.keras.metrics.MeanSquaredError()])
+                          metrics=[tf.keras.metrics.MeanSquaredError()])
 
             model.summary()
 
             callbacks = [keras.callbacks.EarlyStopping(patience=20, min_delta=0.001, monitor='val_mean_squared_error',
-                                                      mode='auto', restore_best_weights=True)]
+                                                       mode='auto', restore_best_weights=True)]
 
             # Define the size of the validation set
             validation_ratio = 0.25
@@ -988,11 +1022,13 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
             last_known_values_train_valid = last_known_values_train[validation_mask]
             Y_train_valid = Y_train[validation_mask]
 
-            train_gen = data_generator(X_train_train, correlation_train_train, decoder_Y_train_train, 
-                                     Y_train_train, last_known_values_train_train, batch_size=batch_size, new_data_ratio=0)
+            train_gen = data_generator(X_train_train, correlation_train_train, decoder_Y_train_train,
+                                       Y_train_train, last_known_values_train_train, batch_size=batch_size,
+                                       new_data_ratio=0)
 
-            val_gen = data_generator(X_train_valid, correlation_train_train, decoder_Y_train_valid, 
-                                   Y_train_valid, last_known_values_train_valid, batch_size=batch_size, new_data_ratio=0)
+            val_gen = data_generator(X_train_valid, correlation_train_train, decoder_Y_train_valid,
+                                     Y_train_valid, last_known_values_train_valid, batch_size=batch_size,
+                                     new_data_ratio=0)
 
             # Calculate the steps per epoch for training and validation
             train_steps = len(X_train_train) // batch_size
@@ -1000,7 +1036,7 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
 
             if ignore_weights == True:
                 history = model.fit(train_gen, steps_per_epoch=train_steps, validation_data=val_gen,
-                                  validation_steps=val_steps, epochs=100, callbacks=callbacks)
+                                    validation_steps=val_steps, epochs=100, callbacks=callbacks)
                 ignore_weights = False
             else:
                 model.load_weights(f'model_weights_{horizon}week.h5')
@@ -1031,23 +1067,23 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
         Test_MSE = mean_squared_error(flattened_actual, flattened_forecast)
 
         if reverse_normalization == True and normalized_data == True:
-            plot_prediction_graph(original_y=data.loc[end_index-horizon:end_index][target_name_original], 
-                                 forecast_list=forecast_list, test_boundary=test_start_index, 
-                                 horizon=horizon, Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
+            plot_prediction_graph(original_y=data.loc[end_index - horizon:end_index][target_name_original],
+                                  forecast_list=forecast_list, test_boundary=test_start_index,
+                                  horizon=horizon, Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
         elif normalized_data == False:
-            transformed_data = scaler2.transform(data.loc[end_index-horizon:end_index][target_name_original])
-            original_y = pd.Series(transformed_data.squeeze(), index=data.loc[end_index-horizon:end_index].index)
+            transformed_data = scaler2.transform(data.loc[end_index - horizon:end_index][target_name_original])
+            original_y = pd.Series(transformed_data.squeeze(), index=data.loc[end_index - horizon:end_index].index)
             plot_prediction_graph(original_y=original_y, forecast_list=forecast_list,
-                                 test_boundary=test_start_index, horizon=horizon,
-                                 Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
+                                  test_boundary=test_start_index, horizon=horizon,
+                                  Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
         else:
             plot_prediction_graph(original_y=data_norm[target_name], forecast_list=forecast_list,
-                                 test_boundary=test_start_index, horizon=horizon,
-                                 Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
+                                  test_boundary=test_start_index, horizon=horizon,
+                                  Test_KPI=Test_MSE, iter=iter, save_dict=forecasting_dir)
 
         # Export and save results
         new_row = [iter, test_range[iter], str(actual[-1]), str(y_pred_rev[-1]),
-                  Test_MAPE, Test_MAE, Test_MSE, Test_CORR, Test_RSE]
+                   Test_MAPE, Test_MAE, Test_MSE, Test_CORR, Test_RSE]
 
         buffered_rows.append(new_row)
 
@@ -1075,8 +1111,9 @@ def run_forecasting_for_horizon(horizon, data, df_norm, consistently_selected_fe
 
     print(f"✅ Completed forecasting for {horizon}-week horizon!")
     print(f"📊 Results saved to: {output_filename}")
-    
+
     return output_filename
+
 
 def get_feature_importance_from_model(model):
     """
@@ -1087,7 +1124,7 @@ def get_feature_importance_from_model(model):
         if isinstance(layer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
             feature_gate_layer = layer
             break
-            
+
     if feature_gate_layer is None:
         for layer in model.layers:
             if hasattr(layer, 'layers'):
@@ -1095,75 +1132,78 @@ def get_feature_importance_from_model(model):
                     if isinstance(sublayer, (ImprovedFeatureGate, SoftFeatureGate, ConsistentFeatureGate)):
                         feature_gate_layer = sublayer
                         break
-    
+
     if feature_gate_layer is None:
         print("⚠️  Could not find FeatureGate layer in the model!")
         return None
-        
+
     importance = feature_gate_layer.get_feature_importance()
     return importance
+
 
 def test_feature_importance_stability(seeds_to_test, model_training_function, lagged_feature_names):
     """
     Test how stable feature importance is across different random seeds
     """
-    
+
     importance_results = {}
-    
+
     for seed in seeds_to_test:
         print(f"🔄 Training stability test with seed {seed}...")
-        
+
         # Set all random seeds
         tf.random.set_seed(seed)
         os.environ['PYTHONHASHSEED'] = str(seed)
         np.random.seed(seed)
         random.seed(seed)
-        
+
         # Train model
         model = model_training_function(seed)
-        
+
         # Extract feature importance
         feature_importance = get_feature_importance_from_model(model)
-        
+
         if feature_importance is not None:
             importance_results[f'seed_{seed}'] = feature_importance
-        
+
         # Clear session for next iteration
         clear_session()
         gc.collect()
-    
+
     # Convert to DataFrame for analysis
     importance_df = pd.DataFrame(importance_results)
-    
+
     return importance_df
+
 
 def analyze_stability(importance_df, lagged_feature_names=None):
     """
     Analyze stability of feature importance across different seeds
     """
-    
+
     # Calculate statistics across seeds
     mean_importance = importance_df.mean(axis=1)
     std_importance = importance_df.std(axis=1)
     cv_importance = std_importance / (mean_importance + 1e-8)
-    
+
     # Create results dataframe
     stability_results = pd.DataFrame({
         'feature_index': range(len(mean_importance)),
         'mean_importance': mean_importance,
-        'std_importance': std_importance, 
+        'std_importance': std_importance,
         'coefficient_of_variation': cv_importance,
         'min_importance': importance_df.min(axis=1),
         'max_importance': importance_df.max(axis=1)
     })
-    
+
     if lagged_feature_names and len(lagged_feature_names) == len(mean_importance):
         stability_results['feature_name'] = lagged_feature_names
-    
+
     # Sort by mean importance
     stability_results = stability_results.sort_values('mean_importance', ascending=False)
-    
+
     return stability_results
+
 
 def run_stability_analysis(model_training_function, seeds_to_test, lagged_feature_names, save_directory):
     """
@@ -1171,424 +1211,27 @@ def run_stability_analysis(model_training_function, seeds_to_test, lagged_featur
     """
     print("🚀 Starting Feature Importance Stability Analysis...")
     print(f"Testing with seeds: {seeds_to_test}")
-    
+
     # Run stability test
     importance_df = test_feature_importance_stability(seeds_to_test, model_training_function, lagged_feature_names)
-    
+
     if importance_df.empty:
         print("❌ No feature importance data collected - check your model implementation")
         return None, None
-    
+
     # Analyze results
     stability_results = analyze_stability(importance_df, lagged_feature_names)
-    
+
     # Save results to files
     importance_df.to_csv(f"{save_directory}/feature_importance_across_seeds.csv")
     stability_results.to_csv(f"{save_directory}/stability_analysis_results.csv", index=False)
-    
+
     print(f"\n💾 Results saved to:")
     print(f"  - {save_directory}/feature_importance_across_seeds.csv")
     print(f"  - {save_directory}/stability_analysis_results.csv")
-    
+
     return importance_df, stability_results
 
-# =====================================================================================
-# MULTI-HORIZON ANALYSIS FUNCTIONS
-# =====================================================================================
-
-def create_multi_horizon_visualizations(horizon_results, save_directory, feature_selection_percent=0.1):
-    """
-    Create comprehensive visualizations comparing feature importance across horizons
-    """
-    
-    horizons = sorted(horizon_results.keys())
-    lagged_feature_names = list(horizon_results.values())[0]['lagged_feature_names']
-    
-    # ===== 1. HEATMAP: Top Features Across All Horizons =====
-    print("📊 Creating multi-horizon feature importance heatmap...")
-    
-    # Collect top features for each horizon
-    top_features_per_horizon = {}
-    all_important_features = set()
-    
-    for horizon in horizons:
-        if horizon not in horizon_results:
-            continue
-            
-        stability_results = horizon_results[horizon]['stability_results']
-        total_features = len(stability_results)
-        top_n = max(1, int(total_features * feature_selection_percent))
-        
-        # Get top features by mean importance
-        top_features = stability_results.nlargest(top_n, 'mean_importance')
-        
-        if 'feature_name' in top_features.columns:
-            feature_names = top_features['feature_name'].tolist()
-        else:
-            feature_names = [lagged_feature_names[idx] for idx in top_features['feature_index']]
-        
-        top_features_per_horizon[horizon] = dict(zip(feature_names, top_features['mean_importance']))
-        all_important_features.update(feature_names)
-    
-    # Create heatmap data
-    heatmap_data = []
-    feature_list = sorted(list(all_important_features))
-    
-    for feature in feature_list:
-        row = []
-        for horizon in horizons:
-            if horizon in top_features_per_horizon and feature in top_features_per_horizon[horizon]:
-                row.append(top_features_per_horizon[horizon][feature])
-            else:
-                row.append(0)  # Feature not important for this horizon
-        heatmap_data.append(row)
-    
-    # Plot heatmap
-    fig, ax = plt.subplots(figsize=(12, max(8, len(feature_list) * 0.3)))
-    heatmap_df = pd.DataFrame(heatmap_data, 
-                             columns=[f'{h}-week' for h in horizons], 
-                             index=feature_list)
-    
-    sns.heatmap(heatmap_df, annot=True, fmt='.3f', cmap='RdYlBu_r', 
-                cbar_kws={'label': 'Feature Importance'}, ax=ax)
-    plt.title('Feature Importance Across Forecast Horizons\n(0 = Not in Top Features for that Horizon)', 
-              fontsize=14, fontweight='bold')
-    plt.xlabel('Forecast Horizon')
-    plt.ylabel('Features')
-    plt.xticks(rotation=0)
-    plt.yticks(rotation=0, fontsize=8)
-    plt.tight_layout()
-    plt.savefig(f'{save_directory}/multi_horizon_feature_heatmap.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # ===== 2. FEATURE RANKING COMPARISON =====
-    print("📊 Creating feature ranking comparison...")
-    
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-    axes = axes.flatten()
-    
-    for i, horizon in enumerate(horizons):
-        if horizon not in horizon_results or i >= len(axes):
-            continue
-            
-        stability_results = horizon_results[horizon]['stability_results']
-        top_features = stability_results.head(15)  # Top 15 for visibility
-        
-        if 'feature_name' in top_features.columns:
-            feature_names = top_features['feature_name']
-        else:
-            feature_names = [lagged_feature_names[idx] for idx in top_features['feature_index']]
-        
-        # Create horizontal bar plot
-        y_pos = np.arange(len(feature_names))
-        axes[i].barh(y_pos, top_features['mean_importance'], alpha=0.8)
-        axes[i].set_yticks(y_pos)
-        axes[i].set_yticklabels(feature_names, fontsize=9)
-        axes[i].set_xlabel('Mean Importance')
-        axes[i].set_title(f'{horizon}-Week Horizon\nTop 15 Features')
-        axes[i].grid(True, alpha=0.3)
-        axes[i].invert_yaxis()  # Top feature at the top
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_directory}/feature_ranking_comparison.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # ===== 3. SHORT-TERM VS LONG-TERM ANALYSIS =====
-    print("📊 Creating short-term vs long-term analysis...")
-    
-    # Define short-term (2, 4 weeks) vs long-term (8, 16 weeks)
-    short_term_horizons = [h for h in horizons if h <= 4]
-    long_term_horizons = [h for h in horizons if h >= 8]
-    
-    # Aggregate importance scores
-    short_term_importance = defaultdict(list)
-    long_term_importance = defaultdict(list)
-    
-    # Collect importance for short-term horizons
-    for horizon in short_term_horizons:
-        if horizon not in horizon_results:
-            continue
-        importance_df = horizon_results[horizon]['importance_df']
-        for idx, feature_name in enumerate(lagged_feature_names):
-            if idx < len(importance_df):
-                mean_importance = importance_df.iloc[idx].drop('feature').mean() if 'feature' in importance_df.columns else importance_df.iloc[idx].mean()
-                short_term_importance[feature_name].append(mean_importance)
-    
-    # Collect importance for long-term horizons
-    for horizon in long_term_horizons:
-        if horizon not in horizon_results:
-            continue
-        importance_df = horizon_results[horizon]['importance_df']
-        for idx, feature_name in enumerate(lagged_feature_names):
-            if idx < len(importance_df):
-                mean_importance = importance_df.iloc[idx].drop('feature').mean() if 'feature' in importance_df.columns else importance_df.iloc[idx].mean()
-                long_term_importance[feature_name].append(mean_importance)
-    
-    # Calculate average importance for each feature
-    short_term_avg = {feat: np.mean(scores) for feat, scores in short_term_importance.items() if scores}
-    long_term_avg = {feat: np.mean(scores) for feat, scores in long_term_importance.items() if scores}
-    
-    # Create comparison DataFrame
-    all_features = set(short_term_avg.keys()) | set(long_term_avg.keys())
-    comparison_data = []
-    
-    for feature in all_features:
-        short_score = short_term_avg.get(feature, 0)
-        long_score = long_term_avg.get(feature, 0)
-        comparison_data.append({
-            'feature': feature,
-            'short_term': short_score,
-            'long_term': long_score,
-            'difference': long_score - short_score,
-            'preference': 'Long-term' if long_score > short_score else 'Short-term'
-        })
-    
-    comparison_df = pd.DataFrame(comparison_data)
-    comparison_df = comparison_df.sort_values('difference', ascending=False)
-    
-    # Plot short-term vs long-term scatter
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
-    
-    # Scatter plot
-    scatter = ax1.scatter(comparison_df['short_term'], comparison_df['long_term'], 
-                         c=comparison_df['difference'], cmap='RdBu_r', alpha=0.7, s=50)
-    ax1.plot([0, max(comparison_df[['short_term', 'long_term']].max())], 
-             [0, max(comparison_df[['short_term', 'long_term']].max())], 'k--', alpha=0.5)
-    ax1.set_xlabel('Short-term Importance (2-4 weeks)')
-    ax1.set_ylabel('Long-term Importance (8-16 weeks)')
-    ax1.set_title('Feature Importance: Short-term vs Long-term')
-    plt.colorbar(scatter, ax=ax1, label='Long-term - Short-term')
-    ax1.grid(True, alpha=0.3)
-    
-    # Top differences
-    top_long_term = comparison_df.head(10)
-    top_short_term = comparison_df.tail(10)
-    
-    y_pos = np.arange(10)
-    width = 0.35
-    
-    ax2.barh(y_pos - width/2, top_long_term['long_term'], width, 
-             label='Long-term Preferred', color='red', alpha=0.7)
-    ax2.barh(y_pos + width/2, -top_short_term['short_term'], width, 
-             label='Short-term Preferred', color='blue', alpha=0.7)
-    
-    # Combine labels
-    combined_labels = list(top_long_term['feature'].str[:25]) 
-    ax2.set_yticks(y_pos)
-    ax2.set_yticklabels(combined_labels, fontsize=9)
-    ax2.set_xlabel('Importance (Long-term: positive, Short-term: negative)')
-    ax2.set_title('Top Features by Time Preference')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_directory}/short_vs_long_term_analysis.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # ===== 4. FEATURE CATEGORY ANALYSIS ACROSS HORIZONS =====
-    print("📊 Creating feature category analysis...")
-    
-    # Define feature categories (improved grouping based on Valley Fever ecology)
-    feature_category_map = {
-        'MARICOPA': 'Surveillance',
-        '20" Soil Temp': 'Soil',
-        '4" Soil Temp': 'Soil',
-        'Air Temp': 'Temperature',
-        # Moisture-related variables (affect fungal growth and spore viability)
-        'Dewpoint': 'Moisture/Humidity', 
-        'Dew-point': 'Moisture/Humidity',
-        'Actual Vapor Pressure': 'Moisture/Humidity',
-        'RH': 'Moisture/Humidity',
-        'VPD': 'Moisture/Humidity',
-        'Precipitation': 'Moisture/Humidity',
-        # Wind and radiation (affect spore dispersal and environmental stress)
-        'Wind Speed': 'Wind/Radiation',
-        'Wind Vector': 'Wind/Radiation',
-        'Wind Direction': 'Wind/Radiation',
-        'Max Wind Speed': 'Wind/Radiation',
-        'Solar Rad': 'Wind/Radiation',
-        'Heat Units': 'Agricultural',
-        'Reference ET': 'Agricultural',
-        'AQI': 'Air Quality',
-        'PM10': 'Air Quality'
-    }
-    
-    def parse_feature_info(feature_name):
-        # Extract base feature and lag
-        match = re.match(r'(.+?) \((-?\d+)\)$', feature_name)
-        if match:
-            base_feature = match.group(1).strip()
-            lag = int(match.group(2))
-            
-            # Determine category
-            category = 'Other'
-            for key, cat in feature_category_map.items():
-                if key in base_feature:
-                    category = cat
-                    break
-                    
-            # Determine lag bin
-            lag_bin = 'Recent (≤3)' if abs(lag) <= 3 else 'Delayed (>3)'
-            
-            return category, lag_bin, abs(lag)
-        return 'Other', 'Recent (≤3)', 0
-    
-    # Analyze category importance across horizons
-    category_horizon_data = []
-    
-    for horizon in horizons:
-        if horizon not in horizon_results:
-            continue
-            
-        stability_results = horizon_results[horizon]['stability_results']
-        
-        for _, row in stability_results.iterrows():
-            if 'feature_name' in stability_results.columns:
-                feature_name = row['feature_name']
-            else:
-                feature_name = lagged_feature_names[row['feature_index']]
-            
-            category, lag_bin, lag_value = parse_feature_info(feature_name)
-            
-            category_horizon_data.append({
-                'horizon': horizon,
-                'feature': feature_name,
-                'category': category,
-                'lag_bin': lag_bin,
-                'lag_value': lag_value,
-                'importance': row['mean_importance'],
-                'stability': row['coefficient_of_variation']
-            })
-    
-    category_df = pd.DataFrame(category_horizon_data)
-    
-    # Create category analysis plot
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    
-    # Category importance by horizon
-    category_means = category_df.groupby(['horizon', 'category'])['importance'].mean().reset_index()
-    category_pivot = category_means.pivot(index='category', columns='horizon', values='importance')
-    
-    sns.heatmap(category_pivot, annot=True, fmt='.3f', cmap='YlOrRd', ax=axes[0,0])
-    axes[0,0].set_title('Average Feature Importance by Category and Horizon')
-    axes[0,0].set_xlabel('Forecast Horizon (weeks)')
-    
-    # Lag bin analysis
-    lag_means = category_df.groupby(['horizon', 'lag_bin'])['importance'].mean().reset_index()
-    lag_pivot = lag_means.pivot(index='lag_bin', columns='horizon', values='importance')
-    
-    sns.heatmap(lag_pivot, annot=True, fmt='.3f', cmap='YlGnBu', ax=axes[0,1])
-    axes[0,1].set_title('Average Feature Importance by Lag Bin and Horizon')
-    axes[0,1].set_xlabel('Forecast Horizon (weeks)')
-    
-    # Category distribution across horizons
-    sns.boxplot(data=category_df, x='horizon', y='importance', hue='category', ax=axes[1,0])
-    axes[1,0].set_title('Feature Importance Distribution by Category')
-    axes[1,0].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    # Lag value vs importance across horizons
-    for horizon in horizons:
-        horizon_data = category_df[category_df['horizon'] == horizon]
-        axes[1,1].scatter(horizon_data['lag_value'], horizon_data['importance'], 
-                         label=f'{horizon}-week', alpha=0.6)
-    
-    axes[1,1].set_xlabel('Lag Value (weeks)')
-    axes[1,1].set_ylabel('Feature Importance')
-    axes[1,1].set_title('Lag Value vs Importance Across Horizons')
-    axes[1,1].legend()
-    axes[1,1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_directory}/category_analysis_across_horizons.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # ===== 5. SUMMARY REPORT =====
-    print("📊 Creating summary report...")
-    
-    # Helper function to remove emojis for file writing (Windows compatibility)
-    def remove_emojis(text):
-        import re
-        emoji_pattern = re.compile("["
-                                   u"\U0001F600-\U0001F64F"  # emoticons
-                                   u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                                   u"\U0001F680-\U0001F6FF"  # transport & map symbols
-                                   u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                                   u"\U00002702-\U000027B0"
-                                   u"\U000024C2-\U0001F251"
-                                   "]+", flags=re.UNICODE)
-        return emoji_pattern.sub(r'', text)
-    
-    with open(f'{save_directory}/multi_horizon_summary_report.txt', 'w', encoding='utf-8') as f:
-        f.write("="*80 + "\n")
-        f.write("MULTI-HORIZON FEATURE IMPORTANCE ANALYSIS SUMMARY\n")
-        f.write("="*80 + "\n\n")
-        
-        for horizon in horizons:
-            if horizon not in horizon_results:
-                continue
-                
-            f.write(f"{horizon}-WEEK HORIZON ANALYSIS:\n")
-            f.write("-" * 50 + "\n")
-            
-            stability_results = horizon_results[horizon]['stability_results']
-            
-            # Top 5 features
-            top_5 = stability_results.head(5)
-            f.write("Top 5 Most Important Features:\n")
-            for idx, (_, row) in enumerate(top_5.iterrows(), 1):
-                if 'feature_name' in stability_results.columns:
-                    feature_name = row['feature_name']
-                else:
-                    feature_name = lagged_feature_names[row['feature_index']]
-                    
-                f.write(f"  {idx}. {feature_name[:60]:<60} (Importance: {row['mean_importance']:.4f})\n")
-            
-            # Stability stats
-            stable_features = len(stability_results[stability_results['coefficient_of_variation'] < 0.3])
-            total_features = len(stability_results)
-            
-            f.write(f"\nStability Statistics:\n")
-            f.write(f"  • Total features: {total_features}\n")
-            f.write(f"  • Stable features (CV < 0.3): {stable_features} ({stable_features/total_features*100:.1f}%)\n")
-            f.write(f"  • Median stability (CV): {stability_results['coefficient_of_variation'].median():.3f}\n\n")
-        
-        # Cross-horizon insights
-        f.write("CROSS-HORIZON INSIGHTS:\n")
-        f.write("-" * 50 + "\n")
-        
-        # Most consistent features across horizons
-        feature_consistency = defaultdict(list)
-        for horizon in horizons:
-            if horizon not in horizon_results:
-                continue
-            stability_results = horizon_results[horizon]['stability_results']
-            top_10_percent = int(len(stability_results) * 0.1)
-            top_features = stability_results.head(top_10_percent)
-            
-            for _, row in top_features.iterrows():
-                if 'feature_name' in stability_results.columns:
-                    feature_name = row['feature_name']
-                else:
-                    feature_name = lagged_feature_names[row['feature_index']]
-                feature_consistency[feature_name].append(horizon)
-        
-        # Features appearing in multiple horizons
-        multi_horizon_features = {feat: horizons_list for feat, horizons_list in feature_consistency.items() 
-                                 if len(horizons_list) > 1}
-        
-        f.write("Features Important Across Multiple Horizons:\n")
-        for feature, feature_horizons in sorted(multi_horizon_features.items(), 
-                                               key=lambda x: len(x[1]), reverse=True)[:10]:
-            f.write(f"  • {feature[:50]:<50} -> {feature_horizons}\n")
-    
-    print(f"✅ Multi-horizon analysis completed!")
-    print(f"📂 Results saved to: {save_directory}/")
-    print(f"📊 Generated visualizations:")
-    print(f"   - multi_horizon_feature_heatmap.png")
-    print(f"   - feature_ranking_comparison.png") 
-    print(f"   - short_vs_long_term_analysis.png")
-    print(f"   - category_analysis_across_horizons.png")
-    print(f"📋 Summary report: multi_horizon_summary_report.txt")
 
 # =====================================================================================
 # MAIN EXECUTION CODE
@@ -1603,25 +1246,25 @@ if __name__ == '__main__':
 
     # Loop over the datasets
     for model_index, file_path in enumerate(base_path):
-        
+
         # Extract the model name from the file path
         model_name = file_path.split('/')[-1].split('.')[0]
-        
+
         # Load data
         data = pd.read_csv(file_path)
         data.drop('Date', axis=1, inplace=True)
-        
+
         # Define horizons to analyze
         horizons_to_analyze = [2, 4, 8, 16]
-        
+
         print(f"\n🚀 Starting Multi-Horizon Feature Importance Analysis for {model_name}")
-        
+
         # Create main results directory
         now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         main_directory = f"multi_horizon_results_{now}_{model_name}"
         if not os.path.exists(main_directory):
             os.makedirs(main_directory)
-        
+
         # Set your parameters
         max_lag = 6
         target_name_original = ['MARICOPA']
@@ -1629,12 +1272,12 @@ if __name__ == '__main__':
         normalized_data = True
         initial_training_normalization = True
         feature_selection_percent = 0.1
-        
+
         # Prepare normalized data
         start_index = 0
         train_end = 850
         initial_train_data = data.loc[start_index:train_end]
-        
+
         if initial_training_normalization and normalized_data:
             scaler = StandardScaler()
             scaler.fit(initial_train_data)
@@ -1642,7 +1285,8 @@ if __name__ == '__main__':
             df_norm = pd.DataFrame(df_norm, columns=data.columns, index=data.index)
         else:
             df_norm = data.copy()
-        
+
+
         # Define the model training function for multi-horizon analysis
         def train_model_for_stability_horizon(seed, horizon, base_data, max_lag):
             """
@@ -1653,30 +1297,31 @@ if __name__ == '__main__':
             os.environ['PYTHONHASHSEED'] = str(seed)
             np.random.seed(seed)
             random.seed(seed)
-            
+
             # Calculate sequence length based on horizon
             sequence_length = 3 * horizon
-            
+
             # Use substantial training data
             end_index_stability = 850
-            
-            print(f"    Training stability model with seed {seed}, horizon {horizon} on data range [{start_index}:{end_index_stability}]")
-            
+
+            print(
+                f"    Training stability model with seed {seed}, horizon {horizon} on data range [{start_index}:{end_index_stability}]")
+
             # Use the normalized data
             df_norm_local = base_data.loc[start_index:end_index_stability]
-            
+
             # Data preprocessing
             data_norm_local, data_diff_local = data_preprocess(
-                df_norm_local, diff_order, start_index, end_index_stability, 
+                df_norm_local, diff_order, start_index, end_index_stability,
                 moving_average=False, MA_window_size=12
             )
-            
+
             # Generate lagged variables
             data_norm_local, data_diff_local, target_comp_updated_list_local, target_name_local = data_set_generation(
-                data_norm_local, data_diff_local, max_lag=max_lag, 
+                data_norm_local, data_diff_local, max_lag=max_lag,
                 target_as_feature=True, target_name=target_name_original
             )
-            
+
             # Preprocessing
             save_instance_local = 0
             save_x_seq_local = []
@@ -1684,35 +1329,35 @@ if __name__ == '__main__':
             save_correlation_seq_local = []
             save_decoder_y_seq_local = []
             save_last_known_values_local = []
-            
+
             save_instance_local, save_x_seq_local, save_y_seq_local, save_decoder_y_seq_local, save_correlation_seq_local, save_last_known_values_local = preprocessing(
-                data_=data_norm_local, data_diff_=data_diff_local, diff_order=diff_order, 
+                data_=data_norm_local, data_diff_=data_diff_local, diff_order=diff_order,
                 sequence_length=sequence_length, horizon=horizon, stride=1, use_graph_layer=True,
-                save_instance=save_instance_local, ignore_first_instance_stride=False, 
+                save_instance=save_instance_local, ignore_first_instance_stride=False,
                 save_x_seq=save_x_seq_local, save_y_seq=save_y_seq_local,
                 save_correlation_seq=save_correlation_seq_local, save_decoder_y_seq=save_decoder_y_seq_local,
                 save_last_known_values=save_last_known_values_local, target_name=target_name_local,
                 target_as_feature=True, target_comp_updated_list=target_comp_updated_list_local,
                 differenced_target=True, differenced_X=True, moving_average=False, MA_window_size=12
             )
-            
+
             print(f"    Generated {len(save_x_seq_local)} sequences for stability training")
-            
+
             # Prepare training data
             X_train_local = np.asarray(save_x_seq_local)
             Y_train_local = np.asarray(save_y_seq_local)
             decoder_Y_train_local = np.asarray(save_decoder_y_seq_local)
             last_known_values_train_local = np.asarray(save_last_known_values_local)
             correlation_train_local = np.array(save_correlation_seq_local)
-            
+
             # Build model
             input_shape_local = X_train_local.shape[1:]
             correlation_shape_local = correlation_train_local.shape[1:]
-            
+
             model_local = build_model(input_shape_local, correlation_shape_local, use_graph_layer=True)
-            model_local.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4), 
-                              metrics=[tf.keras.metrics.MeanSquaredError()])
-            
+            model_local.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                                metrics=[tf.keras.metrics.MeanSquaredError()])
+
             # Prepare training/validation split
             validation_ratio = 0.2
             total_data_size = len(X_train_local)
@@ -1721,67 +1366,70 @@ if __name__ == '__main__':
             validation_mask = np.zeros(total_data_size, dtype=bool)
             validation_mask[validation_indices] = True
             training_mask = ~validation_mask
-            
+
             X_train_train_local = X_train_local[training_mask]
             correlation_train_train_local = np.squeeze(correlation_train_local, axis=0)
             decoder_Y_train_train_local = decoder_Y_train_local[training_mask]
             last_known_values_train_train_local = last_known_values_train_local[training_mask]
             Y_train_train_local = Y_train_local[training_mask]
-            
+
             X_train_valid_local = X_train_local[validation_mask]
             decoder_Y_train_valid_local = decoder_Y_train_local[validation_mask]
             last_known_values_train_valid_local = last_known_values_train_local[validation_mask]
             Y_train_valid_local = Y_train_local[validation_mask]
-            
+
             # Create data generators
-            train_gen_local = data_generator(X_train_train_local, correlation_train_train_local, 
-                                           decoder_Y_train_train_local, Y_train_train_local, 
-                                           last_known_values_train_train_local, batch_size=10, new_data_ratio=0)
-            val_gen_local = data_generator(X_train_valid_local, correlation_train_train_local, 
-                                         decoder_Y_train_valid_local, Y_train_valid_local, 
-                                         last_known_values_train_valid_local, batch_size=10, new_data_ratio=0)
-            
+            train_gen_local = data_generator(X_train_train_local, correlation_train_train_local,
+                                             decoder_Y_train_train_local, Y_train_train_local,
+                                             last_known_values_train_train_local, batch_size=10, new_data_ratio=0)
+            val_gen_local = data_generator(X_train_valid_local, correlation_train_train_local,
+                                           decoder_Y_train_valid_local, Y_train_valid_local,
+                                           last_known_values_train_valid_local, batch_size=10, new_data_ratio=0)
+
             train_steps_local = max(1, len(X_train_train_local) // 10)
             val_steps_local = max(1, len(X_train_valid_local) // 10)
-            
+
             # Train model
-            callbacks_local = [keras.callbacks.EarlyStopping(patience=10, min_delta=0.001, 
-                                                            monitor='val_mean_squared_error', mode='auto', 
-                                                            restore_best_weights=True)]
-            
-            history_local = model_local.fit(train_gen_local, steps_per_epoch=train_steps_local, 
-                                          validation_data=val_gen_local, validation_steps=val_steps_local, 
-                                          epochs=30, callbacks=callbacks_local, verbose=0)
-            
+            callbacks_local = [keras.callbacks.EarlyStopping(patience=10, min_delta=0.001,
+                                                             monitor='val_mean_squared_error', mode='auto',
+                                                             restore_best_weights=True)]
+
+            history_local = model_local.fit(train_gen_local, steps_per_epoch=train_steps_local,
+                                            validation_data=val_gen_local, validation_steps=val_steps_local,
+                                            epochs=30, callbacks=callbacks_local, verbose=0)
+
             print(f"    ✅ Completed training for seed {seed}, horizon {horizon}")
             return model_local
-        
+
+
         # Run multi-horizon stability analysis
         print(f"\n🔄 Running stability analysis across horizons: {horizons_to_analyze}")
-        
+
         # Generate lagged feature names
         original_columns = list(data.columns)
         lagged_feature_names = []
         for col in original_columns:
-            for lag in range(0, max_lag+1):
+            for lag in range(0, max_lag + 1):
                 lagged_feature_names.append(f"{col} ({-lag})")
-        
+
         # Store results for each horizon
         horizon_results = {}
         seeds_to_test = list(range(2))  # You can adjust this
-        
+
         for horizon in horizons_to_analyze:
             print(f"\n🔄 Analyzing Horizon: {horizon} weeks")
-            
+
             # Create horizon-specific directory
             horizon_dir = f"{main_directory}/horizon_{horizon}"
             if not os.path.exists(horizon_dir):
                 os.makedirs(horizon_dir)
-            
+
+
             # Define model training function for this specific horizon
             def train_model_for_current_horizon(seed):
                 return train_model_for_stability_horizon(seed, horizon, df_norm, max_lag)
-            
+
+
             try:
                 # Run stability analysis for this horizon
                 importance_df, stability_results = run_stability_analysis(
@@ -1790,30 +1438,31 @@ if __name__ == '__main__':
                     lagged_feature_names=lagged_feature_names,
                     save_directory=horizon_dir
                 )
-                
+
                 # Store results
                 horizon_results[horizon] = {
                     'importance_df': importance_df,
                     'stability_results': stability_results,
                     'lagged_feature_names': lagged_feature_names
                 }
-                
+
                 print(f"✅ Completed stability analysis for {horizon}-week horizon")
-                
+
                 # ===== DETERMINE CONSISTENTLY SELECTED FEATURES =====
                 print(f"\n🔍 Determining consistently selected features for {horizon}-week horizon...")
                 consistently_selected_features = get_consistently_selected_features(
-                    stability_results, 
+                    stability_results,
                     k_percent=feature_selection_percent,
                     consistency_threshold=0.7
                 )
-                
-                print(f"📊 Selected {len(consistently_selected_features)} features out of {len(stability_results)} total")
-                
+
+                print(
+                    f"📊 Selected {len(consistently_selected_features)} features out of {len(stability_results)} total")
+
                 # Save the selected features for reference
                 selected_features_df = stability_results.loc[consistently_selected_features]
                 selected_features_df.to_csv(f"{horizon_dir}/consistently_selected_features.csv")
-                
+
                 # Save additional metadata for forecasting
                 metadata = {
                     'horizon': horizon,
@@ -1826,55 +1475,50 @@ if __name__ == '__main__':
                     'selected_feature_indices': consistently_selected_features,
                     'lagged_feature_names': lagged_feature_names
                 }
-                
+
                 # Save metadata as JSON for easy loading
                 import json
+
                 with open(f"{horizon_dir}/forecasting_metadata.json", 'w') as f:
                     json.dump(metadata, f, indent=2)
-                
+
                 # Also save selected feature names for easy reference
                 if 'feature_name' in stability_results.columns:
-                    selected_feature_names = stability_results.loc[consistently_selected_features]['feature_name'].tolist()
+                    selected_feature_names = stability_results.loc[consistently_selected_features][
+                        'feature_name'].tolist()
                 else:
                     selected_feature_names = [lagged_feature_names[idx] for idx in consistently_selected_features]
-                
+
                 selected_features_info = pd.DataFrame({
                     'feature_index': consistently_selected_features,
                     'feature_name': selected_feature_names,
                     'importance': stability_results.loc[consistently_selected_features]['mean_importance'].values,
-                    'stability_cv': stability_results.loc[consistently_selected_features]['coefficient_of_variation'].values
+                    'stability_cv': stability_results.loc[consistently_selected_features][
+                        'coefficient_of_variation'].values
                 })
                 selected_features_info.to_csv(f"{horizon_dir}/selected_features_info.csv", index=False)
-                
+
                 print(f"💾 Saved feature selection results for {horizon}-week horizon")
                 print(f"   - consistently_selected_features.csv")
-                print(f"   - forecasting_metadata.json") 
+                print(f"   - forecasting_metadata.json")
                 print(f"   - selected_features_info.csv")
-                
+
             except Exception as e:
                 print(f"❌ Error analyzing {horizon}-week horizon: {str(e)}")
                 continue
-        
-        # Create comparative visualizations
-        if horizon_results:
-            print(f"\n📊 Creating multi-horizon comparative visualizations...")
-            create_multi_horizon_visualizations(
-                horizon_results=horizon_results,
-                save_directory=main_directory,
-                feature_selection_percent=feature_selection_percent
-            )
-        
+
         print(f"\n✅ Multi-horizon stability analysis completed for {model_name}!")
         print(f"📂 Results saved to: {main_directory}/")
 
         # Print final summary
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("📋 STABILITY ANALYSIS SUMMARY")
-        print("="*80)
+        print("=" * 80)
         print(f"🎯 Target Variable: {target_name_original}")
         print(f"🔮 Analyzed Horizons: {horizons_to_analyze} weeks")
         print(f"⏰ Max Lag Features: {max_lag} time steps")
-        print(f"🧠 Feature Selection: Top {feature_selection_percent*100:.0f}% of features ({100-feature_selection_percent*100:.0f}% reduction)")
+        print(
+            f"🧠 Feature Selection: Top {feature_selection_percent * 100:.0f}% of features ({100 - feature_selection_percent * 100:.0f}% reduction)")
         print(f"📈 Graph Neural Network: Enabled")
         print(f"🔄 Transformer Architecture: Enabled")
         print(f"📊 Normalization: {'Enabled' if initial_training_normalization else 'Disabled'}")
@@ -1885,15 +1529,9 @@ if __name__ == '__main__':
         print("   - consistently_selected_features.csv")
         print("   - forecasting_metadata.json")
         print("   - selected_features_info.csv")
-        print("\n📊 Comparative Visualizations:")
-        print("   - multi_horizon_feature_heatmap.png")
-        print("   - feature_ranking_comparison.png")
-        print("   - short_vs_long_term_analysis.png")
-        print("   - category_analysis_across_horizons.png")
-        print("   - multi_horizon_summary_report.txt")
         print("\n🚀 Next Step:")
         print(f"   Run the forecasting script with results directory: {main_directory}")
-        print("="*80)
+        print("=" * 80)
 
     print(f"\n🎉 All analysis completed!")
     print(f"📂 Check results in directory: {main_directory}/")
