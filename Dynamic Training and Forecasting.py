@@ -1,96 +1,3 @@
-#
-# import pandas as pd
-# from statsmodels.tsa.stattools import adfuller
-# import matplotlib.pyplot as plt
-#
-# # Load the data
-# file_path = "C:/Users/sarab/Desktop/Valley Fever/Data/Aggregated Data/Maricopa/Maricopa - For Analysis.csv"
-# data = pd.read_csv(file_path)
-#
-# # Ensure that the 'Date' column is treated as a string
-# data['Date'] = data['Date'].astype(str)
-#
-# # Extract the 'Valley Fever Case Data' column
-# valley_fever_data = data['Valley Fever Case Data']
-#
-# # Perform the Augmented Dickey-Fuller test
-# result = adfuller(valley_fever_data)
-#
-# print('ADF Statistic: %f' % result[0])
-# print('p-value: %f' % result[1])
-# print('Critical Values:')
-# for key, value in result[4].items():
-#     print('\t%s: %.3f' % (key, value))
-#
-# # Plot the time series data
-# plt.figure(figsize=(10, 6))
-# plt.plot(data['Date'], valley_fever_data)
-# plt.xlabel('Date')
-# plt.ylabel('Valley Fever Case Data')
-# plt.title('Valley Fever Case Data over Time')
-# plt.xticks(rotation=45)
-# plt.grid(True)
-# plt.show()
-'''
-import pandas as pd
-from statsmodels.tsa.stattools import adfuller
-import matplotlib.pyplot as plt
-
-# Load the data
-file_path = "C:/Users/sarab/Desktop/Valley Fever/Data/Aggregated Data/Maricopa/Maricopa - For Analysis.csv"
-data = pd.read_csv(file_path)
-
-# Ensure that the 'Date' column is treated as a string
-data['Date'] = data['Date'].astype(str)
-
-# Extract the 'Valley Fever Case Data' column
-valley_fever_data = data['Valley Fever Case Data']
-
-# Differencing the data
-valley_fever_data_diff = valley_fever_data.diff().dropna()
-
-# Perform the Augmented Dickey-Fuller test on the differenced data
-result_diff = adfuller(valley_fever_data_diff)
-
-print('ADF Statistic (Differenced): %f' % result_diff[0])
-print('p-value (Differenced): %f' % result_diff[1])
-print('Critical Values (Differenced):')
-for key, value in result_diff[4].items():
-    print('\t%s: %.3f' % (key, value))
-
-# Plot the original and differenced time series data
-plt.figure(figsize=(12, 8))
-
-# Plot the original data
-plt.subplot(2, 1, 1)
-plt.plot(data['Date'], valley_fever_data, label='Original')
-plt.xlabel('Date')
-plt.ylabel('Valley Fever Case Data')
-plt.title('Original Valley Fever Case Data over Time')
-plt.xticks(rotation=45)
-plt.grid(True)
-plt.legend()
-
-# Plot the differenced data
-plt.subplot(2, 1, 2)
-plt.plot(data['Date'].iloc[1:], valley_fever_data_diff, label='Differenced', color='orange')
-plt.xlabel('Date')
-plt.ylabel('Differenced Valley Fever Case Data')
-plt.title('Differenced Valley Fever Case Data over Time')
-plt.xticks(rotation=45)
-plt.grid(True)
-plt.legend()
-
-plt.tight_layout()
-plt.show()
-
-'''
-
-
-
-
-
-
 import seaborn as sns
 import os
 GPU_ID="0"
@@ -115,9 +22,9 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, mean_absolute_error
 from spektral.layers import GCNConv, SAGPool, MinCutPool, GlobalAttentionPool, JustBalancePool, DiffPool
-from spektral.layers import GATv2Conv
 from spektral.utils import normalized_adjacency
 from sklearn.metrics.pairwise import cosine_similarity
+from gatv2_conv import GATv2Conv  # Import the GATv2Conv layer
 
 
 import random
@@ -130,11 +37,167 @@ from keras.layers import BatchNormalization
 from tensorflow.keras.layers import Dropout, Input
 from spektral.layers import GATConv
 from keras.layers import Add, Concatenate
-from tensorflow.keras.layers import Lambda
+from tensorflow.keras.layers import Lambda, MultiHeadAttention, LayerNormalization
 from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.regularizers import l2
 
+# Add Positional Embedding Layer
+class PositionalEmbedding(layers.Layer):
+    """
+    Adds positional embeddings to the input embeddings.
+    """
+    def __init__(self, max_sequence_length, d_model, **kwargs):
+        super().__init__(**kwargs)
+        self.token_embeddings = layers.Dense(d_model)  # Linear projection to d_model dimension
+        self.pos_embeddings = layers.Embedding(input_dim=max_sequence_length, output_dim=d_model)
+        self.max_sequence_length = max_sequence_length
+        self.d_model = d_model
+
+    def call(self, x):
+        """
+        x shape: (batch_size, sequence_length, input_dim)
+        """
+        seq_len = tf.shape(x)[1]
+        # Ensure positions don't exceed max_sequence_length
+        positions = tf.range(start=0, limit=seq_len, delta=1)
+        positions = tf.minimum(positions, self.max_sequence_length - 1)
+        
+        embedded_tokens = self.token_embeddings(x)  # (batch_size, seq_len, d_model)
+        embedded_positions = self.pos_embeddings(positions)  # (seq_len, d_model)
+        
+        # Add positional embeddings to token embeddings
+        return embedded_tokens + embedded_positions
+
+# Create a look-ahead mask for decoder self-attention
+def create_look_ahead_mask(size):
+    """
+    Creates a causal/look-ahead mask to prevent decoder from attending to future positions.
+    
+    Args:
+        size: The sequence length for both query and key dimensions
+    
+    Returns:
+        A mask of shape (1, 1, size, size) for use with MultiHeadAttention
+    """
+    # Create a 2D upper triangular matrix with ones (will be masked positions)
+    mask_2d = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+    
+    # Expand dimensions to (1, 1, size, size) for compatibility with MultiHeadAttention
+    # This shape represents (batch_size, num_heads, query_seq_len, key_seq_len)
+    mask_4d = mask_2d[tf.newaxis, tf.newaxis, :, :]
+    
+    return mask_4d  # Shape: (1, 1, size, size)
+
+# Add Transformer Encoder Block
+class TransformerEncoder(layers.Layer):
+    """
+    Transformer Encoder block with multi-head attention and feed-forward network.
+    """
+    def __init__(self, d_model, num_heads, ff_dim, dropout=0.1, **kwargs):
+        super().__init__(**kwargs)
+        # Self-attention
+        self.mha = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model, dropout=dropout)
+        self.ffn = keras.Sequential([
+            layers.Dense(ff_dim, activation='relu'),
+            layers.Dense(d_model),
+        ])
+
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+
+    def call(self, x, training=False, mask=None):
+        """
+        Process input through the transformer encoder block.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, d_model)
+            training: Whether in training mode
+            mask: Optional attention mask of shape (batch_size, 1, 1, seq_len)
+        
+        Returns:
+            Processed tensor of shape (batch_size, seq_len, d_model)
+        """
+        # Self Attention
+        attn_output, _ = self.mha(
+            query=x, value=x, key=x, 
+            attention_mask=mask,
+            return_attention_scores=True
+        )
+        attn_output = self.dropout1(attn_output, training=training)
+        out1 = self.layernorm1(x + attn_output)
+
+        # Feed-Forward
+        ffn_output = self.ffn(out1)
+        ffn_output = self.dropout2(ffn_output, training=training)
+        out2 = self.layernorm2(out1 + ffn_output)
+
+        return out2
+
+# Add Transformer Decoder Block
+class TransformerDecoder(layers.Layer):
+    """
+    Transformer Decoder block with masked self-attention, cross-attention and feed-forward network.
+    """
+    def __init__(self, d_model, num_heads, ff_dim, dropout=0.1, **kwargs):
+        super().__init__(**kwargs)
+        # Self-attention (decoder-side)
+        self.self_mha = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model, dropout=dropout)
+        # Cross-attention (encoder-to-decoder)
+        self.cross_mha = layers.MultiHeadAttention(num_heads=num_heads, key_dim=d_model, dropout=dropout)
+        self.ffn = keras.Sequential([
+            layers.Dense(ff_dim, activation='relu'),
+            layers.Dense(d_model),
+        ])
+
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm3 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+        self.dropout3 = layers.Dropout(dropout)
+
+    def call(self, x, enc_output, training=False,
+             look_ahead_mask=None, padding_mask=None):
+        """
+        x shape:          (batch_size, target_seq_len, d_model)  # decoder input
+        enc_output shape: (batch_size, input_seq_len, d_model)
+        look_ahead_mask:  (1, 1, target_seq_len, target_seq_len) or None
+        padding_mask:     (batch_size, 1, 1, input_seq_len) or None
+        """
+        # Apply the look_ahead_mask if not provided but needed
+        target_seq_len = tf.shape(x)[1]
+        if look_ahead_mask is None:
+            look_ahead_mask = create_look_ahead_mask(target_seq_len)
+            
+        # 1) Masked self-attention
+        # The mask shape should be (1, 1, target_seq_len, target_seq_len)
+        attn1, attn_weights_1 = self.self_mha(
+            query=x, value=x, key=x, 
+            attention_mask=look_ahead_mask,
+            return_attention_scores=True
+        )
+        attn1 = self.dropout1(attn1, training=training)
+        out1 = self.layernorm1(x + attn1)
+
+        # 2) Cross-attention with encoder output
+        # For cross-attention, padding_mask shape should be (batch_size, 1, target_seq_len, input_seq_len)
+        attn2, attn_weights_2 = self.cross_mha(
+            query=out1, value=enc_output, key=enc_output,
+            attention_mask=padding_mask,
+            return_attention_scores=True
+        )
+        attn2 = self.dropout2(attn2, training=training)
+        out2 = self.layernorm2(out1 + attn2)
+
+        # 3) Feed-forward
+        ffn_output = self.ffn(out2)
+        ffn_output = self.dropout3(ffn_output, training=training)
+        out3 = self.layernorm3(out2 + ffn_output)
+
+        return out3
 
 
 def data_preprocess(df, diff_order, start_index, end_index,moving_average,MA_window_size):
@@ -160,7 +223,8 @@ def data_preprocess(df, diff_order, start_index, end_index,moving_average,MA_win
 
             # Function to pad the beginning of the DataFrame
             def pad_head(df, pad_width):
-                head = pd.DataFrame([df.iloc[0]] * pad_width)
+                # head = pd.DataFrame([df.iloc[0]] * pad_width)
+                head = pd.DataFrame([df.iloc[0].values] * pad_width, columns=df.columns)
                 return pd.concat([head, df]).reset_index(drop=True)
 
             # Apply padding only to the head
@@ -655,7 +719,7 @@ if __name__ == '__main__':
     # Define the base path and file pattern
     base_path = [
                   # 'C:/Users/sarab/Desktop/Valley Fever/Data/Aggregated Data/Maricopa/Maricopa - For Analysis.csv'
-                "C:/Users/sarab/Desktop/desktop/Valley Fever/Weather Data MARICOPA (MMWR Weeks)/Clean Data(Maricopa)/Clean Processed Data2.csv"
+                "D:/Shared/desktop 3/Valley Fever/Weather Data MARICOPA (MMWR Weeks)/Clean Data(Maricopa)/Clean Processed Data2.csv"
                 ]
 
     # Loop over the numbers you're interested in
@@ -694,15 +758,13 @@ if __name__ == '__main__':
                 moving_average=False
                 MA_window_size=12
                 batch_size = 10
+                feature_gate_k_percent = 0.1  # Percentage of top features to keep (0.5 = 50%)
+                max_lag = 6
 
-
-
-                new_column_names = [str(i) for i in range(len(data.columns))]
-                data.columns = new_column_names
 
                 # Set Target Name
-                # target_name_original = list(new_column_names)
-                target_name_original = ['0']
+                # Replace with the actual name of your target column
+                target_name_original = ['MARICOPA']  # Example: change to your actual column name
                 target_name = target_name_original
 
                 new_row = []
@@ -711,12 +773,12 @@ if __name__ == '__main__':
                 save_to_excel_iter = 10
 
 
-                head_size = 16
-                num_heads = 8
-                ff_dim = 128
-                mlp_units = [128]
-                dropout = 0.1
-                mlp_dropout = 0.1
+                head_size = 32
+                num_heads = 16
+                ff_dim = 256
+                mlp_units = [512]
+                dropout = 0.05
+                mlp_dropout = 0.05
 
                 '''#################### create an output file in the current directory ########################'''
                 # Generate a string representing the current date and time
@@ -774,6 +836,24 @@ if __name__ == '__main__':
                     Y_scaler = scaler2.fit(initial_train_data[target_name])
 
                     df_norm = scaler.transform(data)
+
+                    # Wrap back in a DataFrame
+                    df_norm = pd.DataFrame(
+                        df_norm,
+                        columns=data.columns,
+                        index=data.index
+                    )
+
+
+
+
+
+
+
+
+
+
+
                 if normalized_data == False:
                     scaler2 = StandardScaler()
                     Y_scaler = scaler2.fit(initial_train_data[target_name])
@@ -831,12 +911,22 @@ if __name__ == '__main__':
                         # apply normalization on initial data
                         scaler = StandardScaler()
                         # normalize data based on dynamic training set
+                        # scaler.fit(df[:-horizon])
+                        # df_norm = scaler.transform(df)  # keep the normalized data to predict later
                         scaler.fit(df[:-horizon])
-                        df_norm = scaler.transform(df)  # keep the normalized data to predict later
+                        df_norm_array = scaler.transform(df)
+
+                        # Wrap back in a DataFrame
+                        df_norm = pd.DataFrame(
+                            df_norm_array,
+                            columns=df.columns,
+                            index=df.index
+                        )
 
                         # keep the scaler attributes to reverse the transform later
                         scaler2 = StandardScaler()
                         Y_scaler = scaler2.fit(df[target_name_original][:-horizon])
+
 
 
 
@@ -845,7 +935,7 @@ if __name__ == '__main__':
                     # generate lagged variables
                     data_norm, data_diff, target_comp_updated_list, target_name = data_set_generation(data_norm,
                                                                                                  data_diff,
-                                                                                                 max_lag=12,
+                                                                                                 max_lag=max_lag,
                                                                                                  target_as_feature=target_as_feature,
                                                                                                  target_name=target_name_original)
 
@@ -938,20 +1028,106 @@ if __name__ == '__main__':
 
                                 yield [batch_X, batch_correlation, batch_decoder_Y, batch_last_known_values], batch_Y
 
+                    class FeatureGate(layers.Layer):
+                        def __init__(self, num_features, k_percent=0.5, **kwargs):
+                            super().__init__(**kwargs)
+                            self.num_features = num_features
+                            self.k_percent = k_percent  # Percentage of top features to keep
+
+                        def build(self, input_shape):
+                            # Create a trainable parameter (vector) for gating each feature
+                            # shape=(num_features,)
+                            # Use a randomly initialized weight vector instead of zeros
+                            # This will create more varied gate values
+                            self.logits = self.add_weight(
+                                shape=(self.num_features,),
+                                initializer="random_normal",  # Use random normal initialization
+                                trainable=True,
+                                name="feature_gate_logits"
+                            )
+
+                        def call(self, inputs):
+                            """
+                            inputs shape: (batch_size, num_features, time)
+                            Returns:
+                                Tensor of same shape, with top-k% features preserved and others zeroed out.
+                            """
+                            # Convert logits -> gates in [0,1] (via sigmoid)
+                            gates = tf.nn.sigmoid(self.logits)  # shape = (num_features,)
+                            
+                            # Determine k value (number of features to keep)
+                            k = tf.cast(tf.math.ceil(self.k_percent * tf.cast(self.num_features, tf.float32)), tf.int32)
+                            
+                            # Get the values and indices of the top-k gates
+                            _, top_k_indices = tf.nn.top_k(gates, k=k)
+                            
+                            # Create a mask with zeros everywhere except at top-k indices
+                            mask = tf.zeros_like(gates)
+                            mask = tf.tensor_scatter_nd_update(
+                                mask,
+                                tf.expand_dims(top_k_indices, axis=1),
+                                tf.ones((k,), dtype=tf.float32)
+                            )
+                            
+                            # Apply the mask to gates
+                            masked_gates = gates * mask
+                            
+                            # Reshape to broadcast across batch & time
+                            # gates shape => (1, num_features, 1)
+                            gates_reshaped = tf.reshape(masked_gates, (1, -1, 1))
+                            
+                            # Multiply each feature by its gate
+                            return inputs * gates_reshaped
+                            
+                        def get_feature_importance(self):
+                            """
+                            Returns the learned feature importance gates in [0,1].
+                            Higher values indicate more important features.
+                            
+                            Returns:
+                                numpy array of shape (num_features,) representing feature importance
+                            """
+                            return tf.nn.sigmoid(self.logits).numpy()
+                            
+                        def get_selected_features(self):
+                            """
+                            Returns the indices of the selected top-k features.
+                            
+                            Returns:
+                                numpy array of indices of selected features
+                            """
+                            gates = tf.nn.sigmoid(self.logits)
+                            k = tf.cast(tf.math.ceil(self.k_percent * tf.cast(self.num_features, tf.float32)), tf.int32)
+                            _, top_k_indices = tf.nn.top_k(gates, k=k)
+                            return top_k_indices.numpy()
+
                     def graph_processing_block(inputs, inp_lap, head_size, num_heads, dropout, horizon):
-
+                        """
+                        Process inputs through graph convolutional layers.
+                        
+                        The goal is to maintain the temporal dimension intact while enhancing feature 
+                        representations using graph relationships.
+                        
+                        Note: The inputs shape is (batch_size, sequence_length, n_features) and 
+                        we transpose to (batch_size, n_features, sequence_length) for graph processing.
+                        After graph processing, we transpose back to maintain the time dimension.
+                        """
                         l2_reg = 2.5e-4  # L2 regularization rate
+                        
+                        # Save original sequence length for reshaping later
+                        batch_size, original_seq_len, n_features = tf.shape(inputs)[0], tf.shape(inputs)[1], tf.shape(inputs)[2]
+                        
+                        # Transpose from (batch, time, features) to (batch, features, time)
                         x = tf.transpose(inputs, perm=[0, 2, 1])
-
-                        x_out2, lap_out = MinCutPool(int(x.shape[1]), return_selection=False,
-                                                     name='mincut_pool_1')([x, inp_lap])
-
-                        do_1 = Dropout(dropout)(x_out2)
-
-                        # do_1=x
-                        # lap_out=inp_lap
-                        gc_1 , gc_1_attn = GATConv(
-                            int(math.ceil(x_out2.shape[2])),
+                        
+                        # Replace MinCutPool with FeatureGate - use n_features as num_features
+                        x = FeatureGate(num_features=int(x.shape[1]), k_percent=feature_gate_k_percent, name='feature_gate')(x)
+                        
+                        do_1 = Dropout(dropout)(x)
+                        
+                        # GAT operates on the node/feature dimension
+                        gc_1, gc_1_attn = GATv2Conv(
+                            int(math.ceil(x.shape[2])),
                             attn_heads=num_heads,
                             concat_heads=False,
                             dropout_rate=dropout,
@@ -960,72 +1136,240 @@ if __name__ == '__main__':
                             attn_kernel_regularizer=l2(l2_reg),
                             bias_regularizer=l2(l2_reg),
                             return_attn_coef=True,
-                        )([do_1, lap_out])
-
-                        # do_2 = Dropout(dropout)(gc_1)
-                        # gc_2 ,gc_2_attn= GATConv(
-                        #     int(math.ceil(horizon / 2)),
-                        #     attn_heads=num_heads,
-                        #     concat_heads=False,
-                        #     dropout_rate=dropout,
-                        #     activation="softmax",
-                        #     kernel_regularizer=l2(l2_reg),
-                        #     attn_kernel_regularizer=l2(l2_reg),
-                        #     bias_regularizer=l2(l2_reg),
-                        #     return_attn_coef=True,
-                        # )([do_2, lap_out])
-
+                        )([do_1, inp_lap])
+                        
+                        # Transpose back to (batch, time, features)
+                        # After graph processing, we need to ensure the temporal dimension is preserved
                         graph_output = tf.transpose(gc_1, perm=[0, 2, 1])
-                        gc_2_attn=gc_1_attn
+                        
+                        # For compatibility with the attention visualizations
+                        gc_2_attn = gc_1_attn
+                        
                         return graph_output, gc_1_attn, gc_2_attn
 
+                    def analyze_feature_importance(model, max_lag=max_lag):
+                        """
+                        Extracts and analyzes feature importance from the FeatureGate layer.
+                        
+                        Args:
+                            model: The trained Keras model containing a FeatureGate layer
+                            
+                        Returns:
+                            numpy array of feature importance values
+                        """
+                        # Find the FeatureGate layer in the model
+                        feature_gate_layer = None
+                        for layer in model.layers:
+                            if isinstance(layer, FeatureGate):
+                                feature_gate_layer = layer
+                                break
+                                
+                        # If nested, search through sub-models
+                        if feature_gate_layer is None:
+                            for layer in model.layers:
+                                if hasattr(layer, 'layers'):
+                                    for sublayer in layer.layers:
+                                        if isinstance(sublayer, FeatureGate):
+                                            feature_gate_layer = sublayer
+                                            break
+                        
+                        if feature_gate_layer is None:
+                            print("Could not find FeatureGate layer in the model!")
+                            return None
+                            
+                        # Get feature importance values
+                        importance = feature_gate_layer.get_feature_importance()
+                        
+                        # Get the indices of selected features
+                        selected_features = feature_gate_layer.get_selected_features()
+                        k_percent = feature_gate_layer.k_percent
+                        
+                        # Get feature names from X_train's transposed shape
+                        # For GAT, we transpose from (batch, time, features) to (batch, features, time)
+                        # So the feature dimension corresponds to the columns in the original data
+                        
+                        # Get column names from the original data (before lagging)
+                        original_columns = list(data.columns)
+                        
+                        # In preprocessing, we generate lagged features with names like "feature (-lag)"
+                        # We can recreate these feature names for the visualization
+                        lagged_feature_names = []
+                        for col in original_columns:
+                            for lag in range(0, max_lag+1):  # max_lag=6 as set in data_set_generation
+                                lagged_feature_names.append(f"{col} ({-lag})")
+                                
+                        # Print the top features
+                        feature_indices = np.argsort(importance)[::-1]  # Descending order
+                        
+                        print("Feature Importance Analysis:")
+                        print("-" * 60)
+                        print(f"{'Feature Index':<10} {'Feature Name':<30} {'Importance':<10} {'Selected':<10}")
+                        print("-" * 60)
+                        
+                        for idx in feature_indices:
+                            is_selected = "Yes" if idx in selected_features else "No"
+                            feature_name = lagged_feature_names[idx] if idx < len(lagged_feature_names) else f"Feature {idx}"
+                            print(f"{idx:<10} {feature_name:<30} {importance[idx]:.6f} {is_selected:<10}")
+                            
+                        print(f"\nKeeping top {k_percent*100:.1f}% of features ({len(selected_features)}/{len(importance)})")
+                        
+                        # Create more informative visualizations - show both all features and selected features
+                        
+                        # 1. Full visualization with selected/unselected features colored differently
+                        plt.figure(figsize=(14, max(8, len(feature_indices) * 0.25)))  # Adjust height based on number of features
+                        
+                        # Create color array - green for selected, gray for unselected
+                        colors = ['lightgray'] * len(feature_indices)
+                        for i, idx in enumerate(feature_indices):
+                            if idx in selected_features:
+                                colors[i] = 'lightgreen'
+                        
+                        # Create horizontal bar chart with sorted importance
+                        bars = plt.barh(range(len(feature_indices)), importance[feature_indices], color=colors)
+                        
+                        # Add feature names as y-tick labels
+                        feature_labels = []
+                        for idx in feature_indices:
+                            if idx < len(lagged_feature_names):
+                                feature_labels.append(lagged_feature_names[idx])
+                            else:
+                                feature_labels.append(f"Feature {idx}")
+                        
+                        plt.yticks(range(len(feature_indices)), feature_labels)
+                        
+                        # Add value labels to the end of each bar
+                        for i, v in enumerate(importance[feature_indices]):
+                            plt.text(v + 0.01, i, f"{v:.4f}", va='center')
+                        
+                        # Create legend
+                        from matplotlib.patches import Patch
+                        legend_elements = [
+                            Patch(facecolor='lightgreen', label='Selected'),
+                            Patch(facecolor='lightgray', label='Filtered out')
+                        ]
+                        plt.legend(handles=legend_elements, loc='upper right')
+                        
+                        # Set x-axis limits based on data range with a small buffer
+                        min_val = max(0, np.min(importance) - 0.05)  # Add buffer, but don't go below 0
+                        max_val = np.max(importance) + 0.05  # Add buffer
+                        plt.xlim(min_val, max_val)
+                        
+                        plt.xlabel('Importance Score')
+                        plt.ylabel('Features')
+                        plt.title(f'Feature Importance with Top {k_percent*100:.1f}% Selection')
+                        plt.tight_layout()
+                        
+                        # Save the figure
+                        plt.savefig(f'{directory}/feature_importance_{model_index}.png', dpi=300)
+                        plt.close()
+                        
+                        # 2. Visualization showing only selected features for clarity
+                        plt.figure(figsize=(12, max(6, len(selected_features) * 0.3)))  # Adjust height based on selected features
+                        
+                        # Get indices sorted by importance
+                        selected_indices_sorted = [idx for idx in feature_indices if idx in selected_features]
+                        
+                        # Sort in ascending order for horizontal bar chart (bottom to top)
+                        selected_indices_sorted = selected_indices_sorted[::-1]
+                        
+                        plt.barh(range(len(selected_indices_sorted)), 
+                                 importance[selected_indices_sorted], 
+                                 color='lightgreen')
+                        
+                        # Create labels for selected features
+                        selected_labels = []
+                        for idx in selected_indices_sorted:
+                            if idx < len(lagged_feature_names):
+                                selected_labels.append(lagged_feature_names[idx])
+                            else:
+                                selected_labels.append(f"Feature {idx}")
+                        
+                        plt.yticks(range(len(selected_indices_sorted)), selected_labels)
+                        
+                        # Add value labels
+                        for i, idx in enumerate(selected_indices_sorted):
+                            plt.text(importance[idx] + 0.01, i, f"{importance[idx]:.4f}", va='center')
+                        
+                        # Set x-axis limits for selected features plot
+                        min_val = max(0, np.min(importance[selected_indices_sorted]) - 0.05)
+                        max_val = np.max(importance[selected_indices_sorted]) + 0.05
+                        plt.xlim(min_val, max_val)
+                        
+                        plt.xlabel('Importance Score')
+                        plt.ylabel('Selected Features')
+                        plt.title(f'Top {k_percent*100:.1f}% Selected Features')
+                        plt.tight_layout()
+                        
+                        # Save the selected features figure
+                        plt.savefig(f'{directory}/selected_features_{model_index}.png', dpi=300)
+                        plt.close()
+                        
+                        return importance
+                    
 
-                    def lstm_encoder_decoder_block(graph_output, decoder_inputs, latent_dim, horizon, target_name, dropout):
-                        # One-directional LSTM
-
+                    def transformer_encoder_decoder_block(graph_output, decoder_inputs, d_model, num_heads, ff_dim, horizon, target_name, dropout):
+                        """
+                        Transformer-based encoder-decoder block for time series forecasting.
+                        
+                        The encoder processes the input time series enhanced by GNN,
+                        and the decoder generates the forecast in an auto-regressive manner.
+                        
+                        Args:
+                            graph_output: Output from graph_processing_block, shape (batch_size, seq_length, features)
+                            decoder_inputs: Initial decoder input, shape (batch_size, horizon, features)
+                            d_model: Model dimension
+                            num_heads: Number of attention heads
+                            ff_dim: Feed-forward network dimension
+                            horizon: Forecast horizon
+                            target_name: Target variable name
+                            dropout: Dropout rate
+                        
+                        Returns:
+                            The forecast output
+                        """
                         l2_reg = 2.5e-4  # L2 regularization rate
-
-                        encoder_lstm_1 = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(graph_output)
-                        encoder_drop_1 = Dropout(0.1)(encoder_lstm_1)
-
-                                                # Final LSTM layer of the encoder
-                        encoder_outputs, forward_h, forward_c = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_state=True)(
-                            encoder_drop_1)
-
-                        initial_state = [forward_h, forward_c]
-
-
-                        # Decoder
-                        decoder_lstm_1 = LSTM(int(latent_dim//2), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(decoder_inputs,
-                                                                                           initial_state=initial_state)
-                        decoder_drop_1 = Dropout(dropout)(decoder_lstm_1)
-                        # Add additional LSTM layers for stacking in the decoder
-                        decoder_lstm_2 = LSTM(latent_dim, kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=True)(decoder_drop_1)
-                        decoder_drop_2 = Dropout(dropout)(decoder_lstm_2)
-
+                        
+                        # Get the actual sequence length from the input for positional encoding
+                        sequence_length = tf.shape(graph_output)[1]
+                        max_encoder_length = 200  # Maximum possible sequence length, should be larger than any expected sequence
+                        
+                        # Add positional embeddings to encoder input
+                        encoder_embedding = PositionalEmbedding(max_sequence_length=max_encoder_length, d_model=d_model)
+                        enc_emb = encoder_embedding(graph_output)
+                        
+                        # Encoder stacks (2 layers)
+                        encoder_output = enc_emb
+                        for i in range(2):  # Number of encoder layers
+                            encoder_block = TransformerEncoder(d_model, num_heads, ff_dim, dropout=dropout)
+                            encoder_output = encoder_block(encoder_output)
+                        
+                        # Create look-ahead mask for decoder to ensure causal attention
+                        # In auto-regressive forecasting, each position can only attend to previous positions
+                        look_ahead_mask = create_look_ahead_mask(horizon)  # Now returns shape (1, 1, horizon, horizon)
+                        
+                        # Add positional embeddings to decoder input
+                        decoder_embedding = PositionalEmbedding(max_sequence_length=horizon, d_model=d_model)
+                        dec_emb = decoder_embedding(decoder_inputs)
+                        
+                        # Decoder stacks (2 layers)
+                        decoder_output = dec_emb
+                        for i in range(2):  # Number of decoder layers
+                            decoder_block = TransformerDecoder(d_model, num_heads, ff_dim, dropout=dropout)
+                            # Pass the look_ahead_mask to ensure causality in the decoder
+                            decoder_output = decoder_block(
+                                decoder_output, 
+                                encoder_output,
+                                look_ahead_mask=look_ahead_mask
+                            )
+                        
+                        # Final output layer
                         if Y_sequence == True:
-
-
-                            # outputs = LSTM(horizon, kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=False)(decoder_drop_2)
-                            # outputs = tf.expand_dims(outputs, axis=2)
-                            # outputs = keras.layers.Dense(len(target_name))(outputs)
-
-
-
-                            # LSTM layer now returns the entire sequence
-                            outputs = LSTM(horizon, kernel_regularizer=tf.keras.regularizers.l2(l2_reg),
-                                           return_sequences=True)(decoder_drop_2)
-
-                            # Since return_sequences=True, outputs shape is (batch_size, sequence_length, horizon)
-                            # Apply Dense layer to each timestep
-                            outputs = keras.layers.TimeDistributed(keras.layers.Dense(len(target_name)))(outputs)
-
-
-                            # print("done")
+                            # Output sequence with TimeDistributed dense layer
+                            outputs = keras.layers.TimeDistributed(keras.layers.Dense(len(target_name)))(decoder_output)
                         else:
-                            decoder_dense_input = LSTM(len(target_name), kernel_regularizer=tf.keras.regularizers.l2(l2_reg), return_sequences=False)(decoder_drop_2)
-                            outputs = tf.expand_dims(decoder_dense_input, axis=1)
-
+                            # Single output
+                            outputs = keras.layers.Dense(len(target_name))(decoder_output[:, -1:, :])
+                        
                         return outputs
 
 
@@ -1046,11 +1390,25 @@ if __name__ == '__main__':
                         else:
                             graph_output = inputs
 
-                        latent_dim = 128
+                        # Project to consistent dimension for transformer if needed
+                        d_model = 512  # Transformer embedding dimension
+                        graph_output = layers.Dense(d_model)(graph_output)
+                        
+                        # Create decoder inputs
                         decoder_inputs = tf.keras.Input(
                             shape=(horizon, len(target_name)), name='decoder_inputs')
 
-                        outputs = lstm_encoder_decoder_block(graph_output, decoder_inputs, latent_dim, horizon, target_name, dropout)
+                        # Use transformer encoder-decoder instead of LSTM
+                        outputs = transformer_encoder_decoder_block(
+                            graph_output=graph_output,
+                            decoder_inputs=decoder_inputs,
+                            d_model=d_model,
+                            num_heads=num_heads,
+                            ff_dim=ff_dim,
+                            horizon=horizon,
+                            target_name=target_name,
+                            dropout=dropout
+                        )
 
                         # Assume 'last_known_value_input' is an additional input layer for the last known value before prediction starts
                         last_known_value_input = tf.keras.Input(shape=(1, len(target_name)), name='last_known_values')
@@ -1180,6 +1538,13 @@ if __name__ == '__main__':
 
                         # Saving weights as per your existing code
                         model.save_weights('model_weights_{}.h5'.format(model_index))
+                        
+                        # Analyze feature importance if the model has a FeatureGate layer
+                        if use_graph_layer:
+                            feature_importance = analyze_feature_importance(model, max_lag=max_lag)
+                            # Save feature importance for future analysis if needed
+                            if feature_importance is not None:
+                                np.save(f'feature_importance_{model_index}.npy', feature_importance)
 
 
                     # Predict from last sequence
@@ -1301,4 +1666,3 @@ if __name__ == '__main__':
                     for row in buffered_rows:
                         sheet.append(row)
                     wb.save(output_filename)
-
