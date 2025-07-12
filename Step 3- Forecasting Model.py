@@ -904,7 +904,7 @@ def run_forecasting_for_horizon(horizon, horizon_data, data, df_norm, forecastin
     start_index = 0
     train_end = 850
     test_start_index = 900
-    test_end_index = 1002
+    test_end_index = 991
     test_range = range(test_start_index, test_end_index)
     
     # Create Excel file for results
