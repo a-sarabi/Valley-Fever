@@ -1,0 +1,20 @@
+feature_index,feature_name,importance,stability_cv
+7,"20"" Soil Temp - Max (0)",0.5035917,0.022886826
+120,RH - Min (-1),0.5031739,0.023492275
+195,Daily Mean PM10 Concentration (-6),0.5030405,0.0232771
+106,RH - Max (-1),0.5027336,0.024359576
+142,Solar Rad. - Total (-2),0.50263643,0.025564581
+169,Wind Vector Direction (-1),0.5025949,0.02550477
+1,MARICOPA (-1),0.50234735,0.025057433
+168,Wind Vector Direction (0),0.5022696,0.02132753
+51,Actual Vapor Pressure - Daily Mean (-2),0.5022337,0.023222018
+111,RH - Max (-6),0.50209385,0.026402943
+14,"20"" Soil Temp - Mean (0)",0.50201833,0.024316983
+126,Reference ET (0),0.5020044,0.02729042
+166,Wind Speed - Mean (-5),0.501909,0.024254506
+82,Dewpoint - Daily Mean (-5),0.5018891,0.025154965
+9,"20"" Soil Temp - Max (-2)",0.5018258,0.02164823
+83,Dewpoint - Daily Mean (-6),0.50181824,0.022640508
+33,"4"" Soil Temp - Max (-5)",0.5017939,0.024114382
+155,Wind Direction Std Dev (-1),0.50170195,0.023168445
+32,"4"" Soil Temp - Max (-4)",0.50165904,0.022695348

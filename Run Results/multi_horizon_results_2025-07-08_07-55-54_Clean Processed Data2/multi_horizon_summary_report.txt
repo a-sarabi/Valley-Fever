@@ -1,0 +1,73 @@
+================================================================================
+MULTI-HORIZON FEATURE IMPORTANCE ANALYSIS SUMMARY
+================================================================================
+
+2-WEEK HORIZON ANALYSIS:
+--------------------------------------------------
+Top 5 Most Important Features:
+  1. 20" Soil Temp - Max (0)                                      (Importance: 0.5038)
+  2. RH - Min (-1)                                                (Importance: 0.5038)
+  3. Daily Mean PM10 Concentration (-6)                           (Importance: 0.5036)
+  4. RH - Max (-1)                                                (Importance: 0.5034)
+  5. Wind Vector Direction (-1)                                   (Importance: 0.5032)
+
+Stability Statistics:
+  • Total features: 196
+  • Stable features (CV < 0.3): 196 (100.0%)
+  • Median stability (CV): 0.025
+
+4-WEEK HORIZON ANALYSIS:
+--------------------------------------------------
+Top 5 Most Important Features:
+  1. 20" Soil Temp - Max (0)                                      (Importance: 0.5037)
+  2. RH - Min (-1)                                                (Importance: 0.5032)
+  3. Daily Mean PM10 Concentration (-6)                           (Importance: 0.5032)
+  4. RH - Max (-1)                                                (Importance: 0.5028)
+  5. Solar Rad. - Total (-2)                                      (Importance: 0.5028)
+
+Stability Statistics:
+  • Total features: 196
+  • Stable features (CV < 0.3): 196 (100.0%)
+  • Median stability (CV): 0.025
+
+8-WEEK HORIZON ANALYSIS:
+--------------------------------------------------
+Top 5 Most Important Features:
+  1. 20" Soil Temp - Max (0)                                      (Importance: 0.5036)
+  2. RH - Min (-1)                                                (Importance: 0.5032)
+  3. Daily Mean PM10 Concentration (-6)                           (Importance: 0.5030)
+  4. RH - Max (-1)                                                (Importance: 0.5027)
+  5. Solar Rad. - Total (-2)                                      (Importance: 0.5026)
+
+Stability Statistics:
+  • Total features: 196
+  • Stable features (CV < 0.3): 196 (100.0%)
+  • Median stability (CV): 0.025
+
+16-WEEK HORIZON ANALYSIS:
+--------------------------------------------------
+Top 5 Most Important Features:
+  1. 20" Soil Temp - Max (0)                                      (Importance: 0.5035)
+  2. Daily Mean PM10 Concentration (-6)                           (Importance: 0.5030)
+  3. RH - Min (-1)                                                (Importance: 0.5028)
+  4. Solar Rad. - Total (-2)                                      (Importance: 0.5027)
+  5. Wind Vector Direction (-1)                                   (Importance: 0.5025)
+
+Stability Statistics:
+  • Total features: 196
+  • Stable features (CV < 0.3): 196 (100.0%)
+  • Median stability (CV): 0.025
+
+CROSS-HORIZON INSIGHTS:
+--------------------------------------------------
+Features Important Across Multiple Horizons:
+  • 20" Soil Temp - Max (0)                            -> [2, 4, 8, 16]
+  • RH - Min (-1)                                      -> [2, 4, 8, 16]
+  • Daily Mean PM10 Concentration (-6)                 -> [2, 4, 8, 16]
+  • RH - Max (-1)                                      -> [2, 4, 8, 16]
+  • Wind Vector Direction (-1)                         -> [2, 4, 8, 16]
+  • MARICOPA (-1)                                      -> [2, 4, 8, 16]
+  • Solar Rad. - Total (-2)                            -> [2, 4, 8, 16]
+  • Wind Vector Direction (0)                          -> [2, 4, 8, 16]
+  • Reference ET (0)                                   -> [2, 4, 8, 16]
+  • Actual Vapor Pressure - Daily Mean (-2)            -> [2, 4, 8, 16]
