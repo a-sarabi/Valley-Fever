@@ -1,3 +1,14 @@
+
+<div align="center">
+
+# Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach
+
+[![arXiv](https://img.shields.io/badge/arXiv-2507.10014-b31b1b)](https://arxiv.org/abs/2507.10014)
+
+<img width="750" alt="framework" src="misc/flowchart.jpg">
+
+</div>
+
 # Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -93,12 +104,14 @@ This research advances environmental disease modeling through:
 ## Citation
 
 ```bibtex
-@article{sarabi2024forecasting,
-  title={Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach},
-  author={Sarabi, Ali and Sarabi, Arash and Yan, Hao and Sterner, Beckett and Jevti{\'c}, Petar},
-  journal={Applied Soft Computing},
-  year={2025},
-  note={First application of Graph Neural Networks to Valley Fever forecasting}
+@misc{sarabi2025forecastingcoccidioidomycosisvalleyfever,
+      title={Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach}, 
+      author={Ali Sarabi and Arash Sarabi and Hao Yan and Beckett Sterner and Petar Jevtić},
+      year={2025},
+      eprint={2507.10014},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2507.10014}, 
 }
 ```
 
