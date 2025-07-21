@@ -5,8 +5,6 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2507.10014-b31b1b)](https://arxiv.org/abs/2507.10014)
 
-<img width="750" alt="framework" src="misc/flowchart.jpg">
-
 </div>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
