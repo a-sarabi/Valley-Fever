@@ -10,8 +10,8 @@ def get_file_year(filename):
         year_suffix = int(filename[2:4])  # Extracts the last two digits before "rd"
         if 87 <= year_suffix <= 99:
             year = 1900 + year_suffix  # Files from 1987 to 1999
-        elif 0 <= year_suffix <= 25:
-            year = 2000 + year_suffix  # Files from 2000 to 2025
+        elif 0 <= year_suffix <= 26:
+            year = 2000 + year_suffix  # Files from 2000 to 2026
         else:
             year = None  # Unknown year format
         print(f"File: {filename}, Year extracted: {year}")  # Debugging line
@@ -216,6 +216,6 @@ def process_files(folder_path, output_directory):
 
 
 # Specify the folder containing the text files and the output directory
-folder_path = "D:/Shared/desktop 3/Valley Fever/Weather Data MARICOPA(used)/data MARICOPA"
-output_directory = "D:/Shared/desktop 3/Valley Fever/Weather Data MARICOPA (MMWR Weeks)/Weather Data MARICOPA (MMWR) Codes/Converted Data"
+folder_path = "D:/Shared/desktop 3/Valley Fever/Backup_files/Weather Data MARICOPA(used)/data MARICOPA"
+output_directory = "D:/Shared/desktop 3/Valley Fever/Backup_files/Weather Data MARICOPA (MMWR Weeks)/Weather Data MARICOPA (MMWR) Codes/Converted Data"
 process_files(folder_path, output_directory)

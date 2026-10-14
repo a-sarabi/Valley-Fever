@@ -3,7 +3,7 @@ import os
 import glob
 
 # Directory containing the CSV files
-data_directory = r"D:/Shared/desktop 3/Valley Fever/PM10 Maricopa"
+data_directory = r"D:/Shared/desktop 3/Valley Fever/Backup files/PM10 Maricopa"
 
 # Method code(s) to filter - set to None to include all methods
 # Common method codes:
