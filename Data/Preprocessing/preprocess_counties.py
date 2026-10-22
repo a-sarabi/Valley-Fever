@@ -5,7 +5,8 @@ Steps, per county:
   1. AZMET daily weather files (``SSYYrd.txt``) -> daily table -> cleaning and filling -> MMWR-week means.
   2. EPA AirData daily PM10 files -> county/method filter -> mean per monitor, then over monitors per day
      -> MMWR-week means.
-  3. ADHS "MMWR by County" workbooks -> weekly cases per county (newest workbook wins per year).
+  3. Weekly cases per county from ``Valley Fever Data/cases_weekly_by_county.csv`` (taken from the ADHS
+     "MMWR by County" workbooks; see README.md).
   4. Merge into ``Date, <COUNTY>, <25 weather columns, alphabetical>, Daily AQI Value,
      Daily Mean PM10 Concentration`` from 2006_1 to 2026_39 (``--end``).
 
@@ -13,8 +14,7 @@ Cleaning (details in README.md): physically impossible daily readings are set to
 neighbour-station rules for the 20" soil mean, documented sensor failures); soil-temperature gaps are filled from
 the neighbour stations and every other gap by linear interpolation; PM10 is averaged per monitor-day before the
 county mean, a monitor keeps reporting through its AirNow rows when its AQS rows stop, a day with too few
-monitors is estimated from the reporting ones, and Pima uses the monitor types 79, 122 and 127; a trailing
-partial case week is dropped.
+monitors is estimated from the reporting ones, and Pima uses the monitor types 79, 122 and 127.
 
 Usage (from this folder):
     python preprocess_counties.py                        # all counties -> output/
@@ -72,11 +72,9 @@ COUNTIES: dict[str, dict] = {
     },
 }
 
-CASE_WORKBOOKS = [  # oldest first; a later workbook overrides the same MMWR year
-    DATA / "Valley Fever Data" / "MMWR by County (2006-2024).xlsx",
-    DATA / "Valley Fever Data" / "MMWR by County (2024-2025_ Updated).xlsx",
-    DATA / "Valley Fever Data" / "MMWR by County (2025-26_ MMWRWK-YR).xlsx",
-]
+# weekly case counts (MARICOPA, PIMA, PINAL and the statewide TOTAL), taken from the ADHS "MMWR by County"
+# workbooks, which are not in this repository (see README.md)
+CASES_CSV = DATA / "Valley Fever Data" / "cases_weekly_by_county.csv"
 
 
 
@@ -140,7 +138,6 @@ SOIL20_FILL_MAX_DAYS = 120   # soil gaps up to this length are filled from the n
 SPREAD_WINDOW_DAYS = 7       # 20" Max/Min of a filled day use the median spread of up to this many clean days on each side
 NEIGHBOUR_REF_INTERP_DAYS = 7  # a neighbour's own gaps up to this length are linearly interpolated before it serves as a reference
 PM10_MIN_MONITOR_FRAC = 0.3   # a day is used only if it has at least max(2, ceil(frac * yearly median)) monitors
-CASES_PARTIAL_WEEK_FRAC = 0.5  # a trailing week with a statewide total below this fraction of the median of the previous 8 weeks is dropped
 
 
 def log(msg: str) -> None:
@@ -716,56 +713,11 @@ def read_pm10_folder(folder: Path, pattern: str, county: str,
 
 
 # --------------------------------------------------------------------------------------------
-# 3. ADHS county workbooks -> weekly cases
+# 3. weekly cases
 # --------------------------------------------------------------------------------------------
-def read_case_workbooks(paths: list[Path]) -> tuple[pd.DataFrame, dict]:
-    """Weekly cases by county, MMWR year from the sheet name; later workbooks override years."""
-    by_year: dict[int, pd.DataFrame] = {}
-    provenance: dict[int, str] = {}
-    for path in paths:
-        xl = pd.ExcelFile(path)
-        for sheet in xl.sheet_names:
-            m = re.search(r"(\d{4})", sheet)
-            if not m or "intro" in sheet.lower():
-                continue
-            year = int(m.group(1))
-            d = xl.parse(sheet, header=None)
-            header_row = None
-            for i in range(min(4, len(d))):
-                vals = [str(v).strip().upper() for v in d.iloc[i].tolist()]
-                if "MARICOPA" in vals and "PIMA" in vals:
-                    header_row = i
-                    break
-            if header_row is None:
-                raise SystemExit(f"{path.name} / {sheet}: no header row with county names")
-            cols = [str(v).strip().upper() for v in d.iloc[header_row].tolist()]
-            body = d.iloc[header_row + 1:].copy()
-            body.columns = cols
-            week = pd.to_numeric(body.iloc[:, 0], errors="coerce")
-            body = body[week.notna()].copy()
-            body["MMWR_Week"] = week[week.notna()].astype(int).values
-            table = pd.DataFrame({"MMWR_Year": year, "MMWR_Week": body["MMWR_Week"].values})
-            for c in ("MARICOPA", "PIMA", "PINAL", "TOTAL"):
-                table[c] = pd.to_numeric(body[c], errors="coerce").values
-            if table[["MARICOPA", "PIMA", "PINAL"]].isna().any().any():
-                raise SystemExit(f"{path.name} / {sheet}: empty county cells")
-            if table["MMWR_Week"].duplicated().any():
-                raise SystemExit(f"{path.name} / {sheet}: duplicated weeks")
-            if table["MMWR_Week"].max() > weeks_in_mmwr_year(year):
-                raise SystemExit(f"{path.name} / {sheet}: week {table['MMWR_Week'].max()} does not exist in MMWR year {year}")
-            by_year[year] = table.sort_values("MMWR_Week").reset_index(drop=True)
-            provenance[year] = f"{path.name} / {sheet} (weeks {table.MMWR_Week.min()}-{table.MMWR_Week.max()})"
-    cases = pd.concat([by_year[y] for y in sorted(by_year)], ignore_index=True)
-    for c in ("MARICOPA", "PIMA", "PINAL"):
-        cases[c] = cases[c].astype(int)
-    dropped = None
-    if len(cases) > 9:
-        last_total = cases["TOTAL"].iloc[-1]
-        ref = cases["TOTAL"].iloc[-9:-1].median()
-        if pd.notna(last_total) and last_total < CASES_PARTIAL_WEEK_FRAC * ref:
-            dropped = f"{week_label(cases.MMWR_Year.iloc[-1], cases.MMWR_Week.iloc[-1])} (statewide total {last_total:g} vs median {ref:g} of the previous 8 weeks)"
-            cases = cases.iloc[:-1].copy()
-    return cases, {"provenance": provenance, "dropped_partial_week": dropped}
+def read_cases(path: Path) -> pd.DataFrame:
+    """Weekly cases: columns Date, MMWR_Year, MMWR_Week, MARICOPA, PIMA, PINAL and TOTAL (statewide)."""
+    return pd.read_csv(path)
 
 
 # --------------------------------------------------------------------------------------------
@@ -892,14 +844,11 @@ def main(argv: list[str] | None = None) -> int:
     self_test_mmwr()
     log("MMWR week function: self-test passed (1985-2030)")
 
-    cases, cinfo = read_case_workbooks(CASE_WORKBOOKS)
-    cases["Date"] = [week_label(y, w) for y, w in zip(cases["MMWR_Year"], cases["MMWR_Week"])]
-    save_csv(cases[["Date", "MMWR_Year", "MMWR_Week", "MARICOPA", "PIMA", "PINAL", "TOTAL"]], out / "cases_weekly_by_county.csv")
-    log(f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks); dropped partial week: {cinfo['dropped_partial_week']}")
+    cases = read_cases(CASES_CSV)
+    log(f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks) from {CASES_CSV.name}")
     report = ["# Preprocessing report", "",
-              f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks); trailing partial week dropped: {cinfo['dropped_partial_week']}"]
-    report += [f"  {y}: {cinfo['provenance'][y]}" for y in sorted(cinfo["provenance"])]
-    report.append("  (the most recent weeks of the newest workbook are preliminary: ADHS revises them in later workbooks)")
+              f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks) from {CASES_CSV.name}",
+              "  (the most recent weeks are preliminary: ADHS revises them in later workbooks)"]
 
     weather = prepare_weather()
     for county in args.counties:

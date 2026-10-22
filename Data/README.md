@@ -2,7 +2,7 @@
 
 Weekly Valley fever cases, weather and PM10 (dust) data for three Arizona counties: Maricopa, Pima and Pinal. Weeks are MMWR weeks, the CDC's epidemiological weeks, which run from Sunday to Saturday.
 
-This folder has the original data, as downloaded from the sources listed below, and the processed weekly files made from them. The original data remain under the terms of their sources (ADHS, AZMET and the U.S. EPA); the MIT license of this repository does not apply to them. The processed files are derived from these data and are not products of ADHS, AZMET or the EPA.
+This folder has the original data (the weather and PM10 files as downloaded, and the weekly case counts from ADHS) and the processed weekly files made from them. The original data remain under the terms of their sources (ADHS, AZMET and the U.S. EPA); the MIT license of this repository does not apply to them. The processed files are derived from these data and are not products of ADHS, AZMET or the EPA.
 
 ## Processed data
 
@@ -27,7 +27,7 @@ The Maricopa Agricultural Center station is in Pinal County. Monitor counts cove
 
 ## Original data
 
-- Cases: "MMWR by County" workbooks of the Arizona Department of Health Services (ADHS), in `Valley Fever Data/`.
+- Cases: weekly counts for each county (`MARICOPA`, `PIMA`, `PINAL`) and for Arizona (`TOTAL`), in `Valley Fever Data/cases_weekly_by_county.csv`, taken from the "MMWR by County" workbooks of the Arizona Department of Health Services (ADHS), which are not included here.
 - Weather: daily files of the Arizona Meteorological Network (AZMET), University of Arizona, one station per county:
   - Maricopa: Maricopa Agricultural Center, station 6, <https://azmet.arizona.edu/azmet/06.htm>, in `Maricopa/Weather Data MARICOPA/Original Data MARICOPA/`
   - Pima: Tucson, station 1, <https://azmet.arizona.edu/azmet/01.htm>, in `Pima (Tucson)/Weather Data Pima/Original Data Pima/`
