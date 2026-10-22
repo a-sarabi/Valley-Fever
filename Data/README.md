@@ -14,7 +14,7 @@ This folder has the original data, as downloaded from the sources listed below, 
 | `Clean Processed Data2_Pima.csv` | Pima County | Tucson (station 1) | 9 monitors (method codes 79, 122 and 127) |
 | `Clean Processed Data2_Pinal.csv` | Pinal County | Coolidge (station 5) | 13 monitors (method code 79) |
 
-The Maricopa Agricultural Center station is in Pinal County; the earlier Maricopa file (see below) uses the same station. Monitor counts cover 2006 to 2026; fewer monitors report on any one day.
+The Maricopa Agricultural Center station is in Pinal County. Monitor counts cover 2006 to 2026; fewer monitors report on any one day.
 
 - Rows: MMWR weeks 2006_1 to 2026_39 (1,083 weeks, 1 January 2006 to 3 October 2026). `Date` is the MMWR year and week, for example `2006_1`.
 - Columns: `Date`, the county's weekly number of cases (`MARICOPA`, `PIMA` or `PINAL`), 25 weather variables from AZMET, `Daily AQI Value` and `Daily Mean PM10 Concentration`. No values are missing.
@@ -25,19 +25,16 @@ The Maricopa Agricultural Center station is in Pinal County; the earlier Maricop
 - Cases: each year comes from the newest ADHS workbook that covers it. ADHS revises the counts of the current year in later workbooks, the latest weeks most, so the 2026 counts are preliminary.
 - Not corrected: the county PM10 mean shifts when monitors join, leave or change instrument, and the soil temperature sensors of the three stations read several degrees apart, by amounts that change over time (for example at Coolidge in 2017 and 2021).
 
-`Clean Processed Data2.csv` in this folder is the earlier Maricopa file, which the code in this repository uses. Its weather and PM10 columns were made with the earlier scripts in `PM10 Data/` and `Weather Data MARICOPA/MMWR/`. Its case counts are identical to those in `Clean Processed Data2_Maricopa.csv`. Some weather, PM10 and AQI values differ because of the processing above, and the weather of week 2025_1 differs because the earlier file was made from a copy of `0624rd.txt` that lacked 31 December 2024.
-
 ## Original data
 
 - Cases: "MMWR by County" workbooks of the Arizona Department of Health Services (ADHS), in `Valley Fever Data/`.
 - Weather: daily files of the Arizona Meteorological Network (AZMET), University of Arizona, one station per county:
-  - Maricopa: Maricopa Agricultural Center, station 6, <https://azmet.arizona.edu/azmet/06.htm>, in `Weather Data MARICOPA/Original Data MARICOPA/`
+  - Maricopa: Maricopa Agricultural Center, station 6, <https://azmet.arizona.edu/azmet/06.htm>, in `Maricopa/Weather Data MARICOPA/Original Data MARICOPA/`
   - Pima: Tucson, station 1, <https://azmet.arizona.edu/azmet/01.htm>, in `Pima (Tucson)/Weather Data Pima/Original Data Pima/`
   - Pinal: Coolidge, station 5, <https://azmet.arizona.edu/azmet/05.htm>, in `Pinal (Coolidge)/Weather Data Coolidge/Original Data Coolidge/`
 
   The files are named `SSYYrd.txt` (station `SS`, year `YY`) and have one line per day; four files repeat one day on an identical line, which the processing counts once. The fields are listed at <https://azmet.arizona.edu/azmet/raw2003.htm> for files from 2003 on and at <https://azmet.arizona.edu/azmet/raw1987.htm> for the Maricopa files of 1987 to 2002.
-- PM10 and AQI: daily data of the U.S. Environmental Protection Agency (EPA), Outdoor Air Quality Data, Download Daily Data, <https://www.epa.gov/outdoor-air-quality-data/download-daily-data>, in `PM10 Data/` (Maricopa), `Pima (Tucson)/PM10 Data/` and `Pinal (Coolidge)/PM10 Data/`. The files are named `<County> <Year>.csv` and list the county's PM10 monitors, not only those used here, with one row per monitor (site), instrument (`POC`) and day. Rows whose `Source` is `AirNow` are preliminary; nearly all of them are from 2026.
-- Other files in these folders, such as calendar-week versions, intermediate tables and scripts, are from earlier work and were not used to make `Processed Data/`.
+- PM10 and AQI: daily data of the U.S. Environmental Protection Agency (EPA), Outdoor Air Quality Data, Download Daily Data, <https://www.epa.gov/outdoor-air-quality-data/download-daily-data>, in `Maricopa/PM10 Data/`, `Pima (Tucson)/PM10 Data/` and `Pinal (Coolidge)/PM10 Data/`. The files are named `<County> <Year>.csv` and list the county's PM10 monitors, not only those used here, with one row per monitor (site), instrument (`POC`) and day. Rows whose `Source` is `AirNow` are preliminary; nearly all of them are from 2026.
 
 ## Note on 2024
 

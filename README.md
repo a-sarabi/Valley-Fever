@@ -1,125 +1,41 @@
+# Valley Fever, Weather and PM10 Data for Three Arizona Counties
 
-<div align="center">
+Weekly Valley fever (coccidioidomycosis) case counts for Maricopa, Pima and Pinal counties, Arizona, with weekly weather and PM10 (dust) data. The data cover MMWR weeks 2006_1 to 2026_39 (1 January 2006 to 3 October 2026).
 
-# Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach
+## Contents
 
-[![arXiv](https://img.shields.io/badge/arXiv-2507.10014-b31b1b)](https://arxiv.org/abs/2507.10014)
+- `Data/Processed Data/`: the final weekly files, one per county.
+- `Data/Maricopa/`, `Data/Pima (Tucson)/` and `Data/Pinal (Coolidge)/`: the original daily weather files (AZMET) and PM10 files (EPA) for each county.
+- `Data/Valley Fever Data/`: the original weekly case workbooks (ADHS).
+- `Data/Preprocessing/`: the program that builds the processed files from the original data.
 
-</div>
+[Data/README.md](Data/README.md) describes the sources, columns, units and processing.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![TensorFlow 2.x](https://img.shields.io/badge/TensorFlow-2.x-orange.svg)](https://tensorflow.org/)
+## Using the data
 
-**Authors:** Ali Sarabi¹, Arash Sarabi¹, Hao Yan¹, Beckett Sterner², Petar Jevtić³
+Each processed file has one row per MMWR week, with the county's weekly number of cases, 25 weather variables, PM10 and the air quality index (AQI). For example, in Python:
 
-¹ *School of Computing and Augmented Intelligence, Arizona State University*  
-² *School of Life Sciences, Arizona State University*  
-³ *School of Mathematical and Statistical Sciences, Arizona State University*
+```python
+import pandas as pd
 
-## Overview
-
-This repository presents the first application of Graph Neural Networks (GNNs) to forecast Coccidioidomycosis (Valley Fever) cases in Arizona. Our hybrid model combines graph-based spatial modeling with Transformer-based temporal sequence processing to capture complex spatiotemporal dependencies between environmental factors and disease transmission.
-
-### Key Results
-- **13% MAPE** for 2-week forecasts
-- **16% MAPE** for 4-week forecasts  
-- **21% MAPE** for 8-week forecasts
-- **23% MAPE** for 16-week forecasts
-- **90% dimensionality reduction** while maintaining accuracy
-
-## Methodology
-
-### Model Architecture
-
-The hybrid model consists of four key components:
-
-1. **Graph Construction**: Environmental variables represented as nodes with edges weighted by Pearson correlation coefficients
-2. **Feature Gate**: Dynamic selection of top 10% most informative features
-3. **GATv2 Networks**: Graph attention mechanism for learning variable representations
-4. **Transformer Encoder-Decoder**: Temporal sequence processing for multi-step forecasting
-
-### Data Sources
-
-- **Valley Fever Data**: Maricopa County surveillance data (2006-2024)
-- **Environmental Variables**: Soil temperature, weather patterns, air quality (PM10), agricultural indicators
-- **Temporal Resolution**: Weekly aggregation with up to 6-week lag features
-
-## Results
-
-| Forecast Horizon | MAPE | Top Predictors |
-|------------------|------|----------------|
-| 2-week | 13% | Soil temperature, humidity, PM10 |
-| 4-week | 16% | Soil temperature, humidity, solar radiation |
-| 8-week | 21% | Soil temperature, humidity, wind patterns |
-| 16-week | 23% | Soil temperature, PM10, solar radiation |
-
-**Key Finding**: 20" soil temperature maximum consistently ranked as the most important predictor across all forecast horizons.
-
-## Usage
-
-### Prerequisites
-```bash
-pip install tensorflow>=2.8.0 spektral pandas numpy matplotlib scikit-learn openpyxl
+pima = pd.read_csv("Data/Processed Data/Clean Processed Data2_Pima.csv")
 ```
 
-### Running the Model
-```bash
-# Feature analysis and selection
-python "Step 1- GATv2 and Transformer_Simple Gating top k.py"
-
-# Visualization
-python "Step 2- Visualization.py"
-
-# Forecasting
-python "Step 3- Forecasting Model.py"
-```
-
-## Project Structure
+To rebuild the processed files from the original data (Python 3 with pandas, numpy and openpyxl):
 
 ```
-Valley-Fever/
-├── Data/                           # Datasets
-├── Step 1- GATv2 and Transformer_Simple Gating top k.py  # Feature analysis
-├── Step 2- Visualization.py        # Results visualization
-├── Step 3- Forecasting Model.py    # Main forecasting model
-├── gatv2_conv.py                   # GATv2 implementation
-├── Other models/                   # Baseline models
-└── Run Results/                    # Model outputs
+cd Data/Preprocessing
+python preprocess_counties.py
 ```
 
-## Scientific Contribution
+The program writes the files to `Data/Preprocessing/output/`; they are identical to those in `Data/Processed Data/`.
 
-This research advances environmental disease modeling through:
+## Sources
 
-- **Methodological Innovation**: First GNN application to Valley Fever forecasting
-- **Public Health Impact**: Reliable 16-week advance warning capability
-- **Computational Efficiency**: 90% feature reduction with maintained accuracy
-- **Automated Feature Discovery**: Eliminates manual feature engineering
-
-## Citation
-
-```bibtex
-@misc{sarabi2025forecastingcoccidioidomycosisvalleyfever,
-      title={Forecasting Coccidioidomycosis (Valley Fever) in Arizona: A Graph Neural Network Approach}, 
-      author={Ali Sarabi and Arash Sarabi and Hao Yan and Beckett Sterner and Petar Jevtić},
-      year={2025},
-      eprint={2507.10014},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2507.10014}, 
-}
-```
-
-## Contact
-
-For questions about this research:
-- **Ali Sarabi**: asarabi1@asu.edu
-- **Arash Sarabi**: sarabi.arash@asu.edu
-- **Hao Yan**: haoyan@asu.edu
-
-*Arizona State University, Tempe, AZ 85281, USA*
+- Cases: Arizona Department of Health Services (ADHS), "MMWR by County" workbooks.
+- Weather: Arizona Meteorological Network (AZMET), University of Arizona: Maricopa Agricultural Center (<https://azmet.arizona.edu/azmet/06.htm>), Tucson (<https://azmet.arizona.edu/azmet/01.htm>) and Coolidge (<https://azmet.arizona.edu/azmet/05.htm>).
+- PM10 and AQI: U.S. Environmental Protection Agency (EPA), Outdoor Air Quality Data: <https://www.epa.gov/outdoor-air-quality-data>.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
+The code is released under the MIT License (see [LICENSE](LICENSE)). The data remain under the terms of their sources (ADHS, AZMET and the U.S. EPA).
