@@ -11,7 +11,7 @@ with 1083 rows (MMWR weeks 2006_1 .. 2026_39) and no missing cells.
 
 ## Run
 
-Requires Python 3 with pandas, numpy and openpyxl (tested with Python 3.13, pandas 2.2, numpy 2.2 and openpyxl 3.1).
+Requires Python 3 with pandas and numpy (tested with Python 3.13, pandas 2.2 and numpy 2.2).
 The `output/` folder is not tracked by git.
 
 ```
@@ -29,7 +29,6 @@ The program writes these files to `output/`:
 | `Clean Processed Data2_<County>.csv` | final weekly files, identical to those in `Data/Processed Data/` |
 | `<County>_weather_daily.csv`, `<County>_weather_weekly_mmwr.csv` | daily AZMET table after cleaning and filling, and its MMWR-week means (`n_days` = days in the week) |
 | `<County>_pm10_daily.csv`, `<County>_pm10_weekly_mmwr.csv` | monitor-averaged daily PM10/AQI (`n_monitors`, `n_airnow`) and MMWR-week means |
-| `cases_weekly_by_county.csv` | weekly cases for MARICOPA, PIMA, PINAL and the statewide total |
 | `preprocessing_report.md` | what was read, flagged, filled, estimated or dropped, per county |
 
 ## Steps
@@ -42,10 +41,11 @@ The program writes these files to `output/`:
 2. **PM10 / AQI.** EPA AirData daily files are filtered to the county and to the monitor method codes below,
    averaged per monitor-day and then over monitors (PM10 rounded to 2 decimals, AQI to 1), and over the days of each
    MMWR week.
-3. **Cases.** The ADHS "MMWR by County" workbooks are read sheet by sheet (MMWR year from the sheet name, header row
-   found by the county names, `Total` rows ignored, week numbers checked against the MMWR calendar). A newer workbook
-   overrides an older one for the same year: 2006-2023 from `MMWR by County (2006-2024).xlsx`, 2024 from
-   `(2024-2025_ Updated)`, 2025-2026 from `(2025-26_ MMWRWK-YR)`.
+3. **Cases.** The weekly counts are read from `Data/Valley Fever Data/cases_weekly_by_county.csv`. They were taken
+   from the ADHS "MMWR by County" workbooks, which are not in this repository: sheet by sheet (MMWR year from the
+   sheet name, header row found by the county names, `Total` rows ignored, week numbers checked against the MMWR
+   calendar), with a newer workbook overriding an older one for the same year (2006-2023 from
+   `MMWR by County (2006-2024).xlsx`, 2024 from `(2024-2025_ Updated)`, 2025-2026 from `(2025-26_ MMWRWK-YR)`).
 4. **Merge** on MMWR year and week from 2006_1 to 2026_39 (option `--end`), the last complete week of case counts,
    so that all counties cover the same weeks.
 
@@ -107,8 +107,9 @@ whose mean lay outside their own max or min).
   BAM. Pima therefore uses the method codes 79 (TEOM), 122 (BAM) and 127 (Partisol filter samplers, until 2017): 2-8
   monitors per day (2 on 32 days, never 1), identical to 122-only from 2018 on.
 
-**Cases.** A trailing week whose statewide total is below half the median of the previous 8 weeks is dropped
-(2026_40: statewide total 15 against about 250). Counts of the whole current year are revised in later workbooks:
+**Cases.** When the counts were taken from the workbooks, a trailing week whose statewide total was below half the
+median of the previous 8 weeks was dropped (2026_40: statewide total 15 against about 250). Counts of the whole
+current year are revised in later workbooks:
 every week of 2024 and 20 of 21 weeks of 2025 changed between workbooks, by up to -9% for Maricopa (-7.5% for the
 statewide total); the small Pima and Pinal weekly counts changed by -13% to +27% and -15% to +33% in 2024 (Pinal down
 to -12.5% in 2025). The largest statewide and Maricopa revisions, apart from a partial last week, are in the last two

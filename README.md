@@ -6,7 +6,7 @@ Weekly Valley fever (coccidioidomycosis) case counts for Maricopa, Pima and Pina
 
 - `Data/Processed Data/`: the final weekly files, one per county.
 - `Data/Maricopa/`, `Data/Pima (Tucson)/` and `Data/Pinal (Coolidge)/`: the original daily weather files (AZMET) and PM10 files (EPA) for each county.
-- `Data/Valley Fever Data/`: the original weekly case workbooks (ADHS).
+- `Data/Valley Fever Data/`: the weekly case counts for each county (ADHS).
 - `Data/Preprocessing/`: the program that builds the processed files from the original data.
 
 [Data/README.md](Data/README.md) describes the sources, columns, units and processing.
@@ -21,7 +21,7 @@ import pandas as pd
 pima = pd.read_csv("Data/Processed Data/Clean Processed Data2_Pima.csv")
 ```
 
-To rebuild the processed files from the original data (Python 3 with pandas, numpy and openpyxl):
+To rebuild the processed files from the original data (Python 3 with pandas and numpy):
 
 ```
 cd Data/Preprocessing
