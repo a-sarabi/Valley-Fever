@@ -1,28 +1,23 @@
-"""Build "Clean Processed Data2"-style weekly (MMWR) files for Maricopa, Pima and Pinal.
+"""Build weekly (MMWR) files for Maricopa, Pima and Pinal from the original data.
 
-One script replaces the three Maricopa preprocessing scripts and runs them per county:
+Steps, per county:
 
-  1. AZMET daily weather files (``SSYYrd.txt``) -> daily table -> MMWR-week means.
-  2. EPA AirData daily PM10 files -> county/method filter -> mean over monitors per day -> MMWR-week means.
+  1. AZMET daily weather files (``SSYYrd.txt``) -> daily table -> cleaning and filling -> MMWR-week means.
+  2. EPA AirData daily PM10 files -> county/method filter -> mean per monitor, then over monitors per day
+     -> MMWR-week means.
   3. ADHS "MMWR by County" workbooks -> weekly cases per county (newest workbook wins per year).
   4. Merge into ``Date, <COUNTY>, <25 weather columns, alphabetical>, Daily AQI Value,
-     Daily Mean PM10 Concentration`` from 2006_1 to the last common week.
+     Daily Mean PM10 Concentration`` from 2006_1 to 2026_39 (``--end``).
 
-Two rule sets:
-
-* default ("recommended"): the original steps plus the fixes listed in README.md:
-  physically impossible daily readings are set to missing (station rules, neighbour-station rules
-  for the 20" soil mean, documented sensor failures); 20" soil gaps are filled from the neighbour
-  stations and every other gap by linear interpolation; PM10 is averaged per monitor-day before the
-  county mean, a monitor keeps reporting through its AirNow rows when its AQS rows stop, a day with
-  too few monitors is estimated from the reporting ones, and Pima uses the monitor types 79, 122 and
-  127; a trailing partial case week is dropped.
-* ``--legacy-rules``: exactly the original Maricopa scripts (999 values left empty and the
-  remaining days averaged, no QC, row mean over method-79 monitors, no AirNow rows); see README.md.
+Cleaning (details in README.md): physically impossible daily readings are set to missing (station rules,
+neighbour-station rules for the 20" soil mean, documented sensor failures); soil-temperature gaps are filled from
+the neighbour stations and every other gap by linear interpolation; PM10 is averaged per monitor-day before the
+county mean, a monitor keeps reporting through its AirNow rows when its AQS rows stop, a day with too few
+monitors is estimated from the reporting ones, and Pima uses the monitor types 79, 122 and 127; a trailing
+partial case week is dropped.
 
 Usage (from this folder):
-    python preprocess_counties.py                        # recommended rules for all counties -> output/
-    python preprocess_counties.py --legacy-rules          # original rules for all counties -> output/legacy_rules/
+    python preprocess_counties.py                        # all counties -> output/
     python preprocess_counties.py --counties Pima Pinal --end 2026_39
 """
 from __future__ import annotations
@@ -49,7 +44,7 @@ OUT = HERE / "output"
 # --------------------------------------------------------------------------------------------
 # pm10_methods: EPA AQS method codes of the monitors that are averaged (79 = R&P TEOM, the choice of
 #   the original Maricopa script; 122 = Met One BAM; 127 = R&P Partisol 2025 filter samplers, used in
-#   Tucson until 2017). pm10_methods_legacy: the single method used under --legacy-rules.
+#   Tucson until 2017).
 COUNTIES: dict[str, dict] = {
     "Maricopa": {
         "cases_col": "MARICOPA",
@@ -58,7 +53,6 @@ COUNTIES: dict[str, dict] = {
         "pm10_glob": "Maricopa *.csv",
         "pm10_county": "Maricopa",
         "pm10_methods": [79],
-        "pm10_methods_legacy": [79],
     },
     "Pima": {
         "cases_col": "PIMA",
@@ -67,7 +61,6 @@ COUNTIES: dict[str, dict] = {
         "pm10_glob": "Pima *.csv",
         "pm10_county": "Pima",
         "pm10_methods": [79, 122, 127],
-        "pm10_methods_legacy": [122],
     },
     "Pinal": {
         "cases_col": "PINAL",
@@ -76,7 +69,6 @@ COUNTIES: dict[str, dict] = {
         "pm10_county": "Pinal",
         "pm10_glob": "Pinal *.csv",
         "pm10_methods": [79],
-        "pm10_methods_legacy": [79],
     },
 }
 
@@ -291,18 +283,6 @@ def azmet_file_year(name: str) -> int | None:
         return None
     yy = int(m.group(2))
     return 1900 + yy if yy >= 87 else 2000 + yy
-
-
-def fix_trailing_newlines(folder: Path) -> list[str]:
-    """Remove blank lines and the newline at the very end of every raw AZMET .txt file (in place)."""
-    changed = []
-    for path in sorted(folder.glob("*.txt")):
-        raw = path.read_bytes()
-        stripped = raw.rstrip(b"\r\n \t")
-        if stripped != raw:
-            path.write_bytes(stripped)
-            changed.append(path.name)
-    return changed
 
 
 def parse_azmet_folder(folder: Path) -> tuple[pd.DataFrame, dict]:
@@ -583,44 +563,35 @@ def qc_neighbours(stations: dict[str, pd.DataFrame]) -> dict[str, dict]:
     return result
 
 
-def prepare_weather(legacy: bool, clean_raw_for: list[str]) -> dict[str, tuple[pd.DataFrame, dict]]:
+def prepare_weather() -> dict[str, tuple[pd.DataFrame, dict]]:
     """Daily weather tables of all stations, ready for weekly aggregation.
 
-    legacy=True: the original script's behaviour (999 values stay empty, so the weekly mean averages the
-    remaining days; no QC; no calendar completion).
-    legacy=False: missing calendar days inserted; station-level rules; neighbour rules for the 20" soil mean;
-    20" and 4" soil gaps filled from the neighbour stations; every other gap linearly interpolated; Max >= Mean >= Min on
-    every day from 2003 on. All three stations are always processed because the neighbour steps need all of them.
+    Missing calendar days inserted; station-level rules; neighbour rules for the 20" soil mean; 20" and 4" soil
+    gaps filled from the neighbour stations; every other gap linearly interpolated; Max >= Mean >= Min on every day
+    from 2003 on. All three stations are always processed because the neighbour steps need all of them.
     """
     stations: dict[str, pd.DataFrame] = {}
     infos: dict[str, dict] = {}
     for county, cfg in COUNTIES.items():
-        info: dict = {"raw_files_cleaned": None, "missing_calendar_days": [], "qc": {}, "neighbour_qc": {},
-                      "soil20_fills": [], "ordering_fixes": 0}
-        if county in clean_raw_for:
-            info["raw_files_cleaned"] = len(fix_trailing_newlines(cfg["azmet_dir"]))
+        info: dict = {"missing_calendar_days": [], "qc": {}, "neighbour_qc": {}, "soil20_fills": [], "ordering_fixes": 0}
         df, pinfo = parse_azmet_folder(cfg["azmet_dir"])
         info.update(pinfo)
         df = df.sort_values("Date").reset_index(drop=True)
-        if not legacy:
-            df, info["missing_calendar_days"] = complete_calendar(df)
-            df, info["qc"] = qc_within_station(df, county)
+        df, info["missing_calendar_days"] = complete_calendar(df)
+        df, info["qc"] = qc_within_station(df, county)
         stations[county], infos[county] = df, info
     value_cols = [c for c in stations["Maricopa"].columns if c not in META_COLS and c != "Date"]
-    if not legacy:
-        for county, res in qc_neighbours(stations).items():
-            infos[county]["neighbour_qc"] = res
+    for county, res in qc_neighbours(stations).items():
+        infos[county]["neighbour_qc"] = res
     for county, df in stations.items():
         infos[county]["gaps"] = gap_summary(df, value_cols)
         infos[county]["missing_values_total"] = int(df[value_cols].isna().sum().sum())
-    if not legacy:
-        for county, filled in fill_soil_from_neighbours(stations).items():
-            infos[county]["soil20_fills"] = filled
+    for county, filled in fill_soil_from_neighbours(stations).items():
+        infos[county]["soil20_fills"] = filled
     out = {}
     for county, df in stations.items():
-        if not legacy:
-            df[value_cols] = df[value_cols].astype(float).interpolate(method="linear", limit_direction="both")
-            infos[county]["ordering_fixes"] = enforce_ordering(df)
+        df[value_cols] = df[value_cols].astype(float).interpolate(method="linear", limit_direction="both")
+        infos[county]["ordering_fixes"] = enforce_ordering(df)
         df = add_mmwr(df)
         infos[county]["days"] = len(df)
         infos[county]["first_day"], infos[county]["last_day"] = df["Date"].min().date(), df["Date"].max().date()
@@ -658,8 +629,8 @@ def load_pm10_raw(folder: Path, pattern: str, county: str) -> tuple[pd.DataFrame
     return raw, len(files)
 
 
-def read_pm10_folder(folder: Path, pattern: str, county: str, methods: list[int],
-                     legacy: bool) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def read_pm10_folder(folder: Path, pattern: str, county: str,
+                     methods: list[int]) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     raw, n_files = load_pm10_raw(folder, pattern, county)
     info = {"files": n_files, "rows": len(raw),
             "methods_in_data": sorted(int(m) for m in raw["Method Code"].dropna().unique()),
@@ -668,76 +639,68 @@ def read_pm10_folder(folder: Path, pattern: str, county: str, methods: list[int]
     aqs = raw[raw["Method Code"].isin(methods)]
     info["monitors_selected"] = int(aqs["Site ID"].nunique())
     info["rows_selected"] = len(aqs)
-    info["negative_rows_clipped"] = 0
-    if not legacy:
-        neg = raw["Daily Mean PM10 Concentration"] < 0
-        info["negative_rows_clipped"] = int((neg & raw["Method Code"].isin(methods)).sum())
-        raw = raw.copy()
-        raw.loc[neg, "Daily Mean PM10 Concentration"] = 0.0
-        aqs = raw[raw["Method Code"].isin(methods)]
-    if legacy:
-        # original script: mean over all selected rows of a date (a site with two POCs counts twice)
-        daily = aqs.groupby("Date", as_index=False)[PM10_COLS].mean()
-        daily["n_monitors"] = aqs.groupby("Date")["Site ID"].nunique().values
-        info["rule"] = "row mean over AQS rows of the selected methods; no AirNow rows; no monitor-count rule"
-    else:
-        # per site-day first (collapses duplicate POCs), then over sites
-        sd = aqs.groupby(["Date", "Site ID"], as_index=False)[PM10_COLS].mean()
-        sd["source"] = "AQS"
-        sites = set(sd["Site ID"])
-        # a selected monitor keeps reporting through its preliminary AirNow rows once its quality-assured
-        # AQS rows stop (interior AQS gaps are not filled: an invalidated day stays out). A site whose
-        # AQS record continues under another method code after its last selected-method day changed
-        # instrument and is not continued.
-        last_sel = sd.groupby("Site ID")["Date"].max()
-        last_any = raw[raw["Method Code"].notna()].groupby("Site ID")["Date"].max()
-        recent = aqs["Date"].max() - pd.Timedelta(days=365)  # only monitors active within the last year of the AQS feed
-        eligible = {s for s in sites if last_any.get(s) == last_sel[s] and last_sel[s] >= recent}
-        an = raw[raw["Method Code"].isna() & raw["Site ID"].isin(eligible)]
-        an = an[an["Date"] > an["Site ID"].map(last_sel)]
-        info["airnow_sites"] = sorted(an["Site ID"].unique().tolist())
-        an_sd = an.groupby(["Date", "Site ID"], as_index=False)[PM10_COLS].mean()
-        an_sd["source"] = "AirNow"
-        info["airnow_site_days"] = len(an_sd)
-        if len(an_sd):
-            info["airnow_first_day"], info["airnow_last_day"] = an_sd["Date"].min().date(), an_sd["Date"].max().date()
-        sd = pd.concat([sd, an_sd], ignore_index=True)
-        daily = sd.groupby("Date", as_index=False)[PM10_COLS].mean()
-        daily["n_monitors"] = sd.groupby("Date")["Site ID"].nunique().values
-        daily["n_airnow"] = sd.groupby("Date")["source"].apply(lambda s: int((s == "AirNow").sum())).values
-        # minimum-monitor rule per calendar year
-        year = daily["Date"].dt.year
-        med = daily.groupby(year)["n_monitors"].median()
-        thr = year.map(lambda y: max(2, math.ceil(PM10_MIN_MONITOR_FRAC * med[y])))
-        drop = daily["n_monitors"] < thr
-        # a day with too few monitors is estimated from the monitors that did report, scaled by their median
-        # ratio to the full county mean over the previous year (days on which all of them reported and the
-        # county mean passed the rule); without 30 such days it is dropped
-        good = daily.loc[~drop].set_index("Date")[PM10_COLS]
-        imputed = []
-        for i in daily.index[drop]:
-            day = daily.at[i, "Date"]
-            today = sd[sd["Date"] == day]
-            sites = set(today["Site ID"])
-            hist = sd[(sd["Date"] < day) & (sd["Date"] >= day - pd.Timedelta(days=365)) & sd["Site ID"].isin(sites)]
-            per_day = hist.groupby("Date")["Site ID"].nunique()
-            days_all = per_day.index[per_day == len(sites)].intersection(good.index)
-            if len(days_all) < 30:
-                continue
-            sub = hist[hist["Date"].isin(days_all)].groupby("Date")[PM10_COLS].mean()
-            ratio = (good.loc[days_all, PM10_COLS] / sub[PM10_COLS].where(sub[PM10_COLS] > 0)).median()
-            daily.loc[i, PM10_COLS] = (today[PM10_COLS].mean() * ratio)[PM10_COLS].to_numpy()
-            drop.loc[i] = False
-            imputed.append(f"{day.date()} ({len(sites)} of median {med[day.year]:g} monitors; their mean "
-                           f"{today['Daily Mean PM10 Concentration'].mean():.1f} x ratio {ratio['Daily Mean PM10 Concentration']:.2f} "
-                           f"= {daily.at[i, 'Daily Mean PM10 Concentration']:.1f} ug/m3)")
-        info["imputed_days_few_monitors"] = imputed
-        info["dropped_days_few_monitors"] = [f"{d.date()} ({n} of median {m:g})" for d, n, m in
-                                            zip(daily.loc[drop, "Date"], daily.loc[drop, "n_monitors"], year[drop].map(med))]
-        daily = daily[~drop].copy()
-        info["rule"] = (f"mean per monitor-day, then over monitors; a selected monitor continues through its AirNow rows after "
-                        f"its last AQS day; a day with fewer than max(2, ceil({PM10_MIN_MONITOR_FRAC} x yearly median)) monitors "
-                        f"is the reporting monitors' mean times their median ratio to the county mean over the previous year")
+    neg = raw["Daily Mean PM10 Concentration"] < 0
+    info["negative_rows_clipped"] = int((neg & raw["Method Code"].isin(methods)).sum())
+    raw = raw.copy()
+    raw.loc[neg, "Daily Mean PM10 Concentration"] = 0.0
+    aqs = raw[raw["Method Code"].isin(methods)]
+    # per site-day first (collapses duplicate POCs), then over sites
+    sd = aqs.groupby(["Date", "Site ID"], as_index=False)[PM10_COLS].mean()
+    sd["source"] = "AQS"
+    sites = set(sd["Site ID"])
+    # a selected monitor keeps reporting through its preliminary AirNow rows once its quality-assured
+    # AQS rows stop (interior AQS gaps are not filled: an invalidated day stays out). A site whose
+    # AQS record continues under another method code after its last selected-method day changed
+    # instrument and is not continued.
+    last_sel = sd.groupby("Site ID")["Date"].max()
+    last_any = raw[raw["Method Code"].notna()].groupby("Site ID")["Date"].max()
+    recent = aqs["Date"].max() - pd.Timedelta(days=365)  # only monitors active within the last year of the AQS feed
+    eligible = {s for s in sites if last_any.get(s) == last_sel[s] and last_sel[s] >= recent}
+    an = raw[raw["Method Code"].isna() & raw["Site ID"].isin(eligible)]
+    an = an[an["Date"] > an["Site ID"].map(last_sel)]
+    info["airnow_sites"] = sorted(an["Site ID"].unique().tolist())
+    an_sd = an.groupby(["Date", "Site ID"], as_index=False)[PM10_COLS].mean()
+    an_sd["source"] = "AirNow"
+    info["airnow_site_days"] = len(an_sd)
+    if len(an_sd):
+        info["airnow_first_day"], info["airnow_last_day"] = an_sd["Date"].min().date(), an_sd["Date"].max().date()
+    sd = pd.concat([sd, an_sd], ignore_index=True)
+    daily = sd.groupby("Date", as_index=False)[PM10_COLS].mean()
+    daily["n_monitors"] = sd.groupby("Date")["Site ID"].nunique().values
+    daily["n_airnow"] = sd.groupby("Date")["source"].apply(lambda s: int((s == "AirNow").sum())).values
+    # minimum-monitor rule per calendar year
+    year = daily["Date"].dt.year
+    med = daily.groupby(year)["n_monitors"].median()
+    thr = year.map(lambda y: max(2, math.ceil(PM10_MIN_MONITOR_FRAC * med[y])))
+    drop = daily["n_monitors"] < thr
+    # a day with too few monitors is estimated from the monitors that did report, scaled by their median
+    # ratio to the full county mean over the previous year (days on which all of them reported and the
+    # county mean passed the rule); without 30 such days it is dropped
+    good = daily.loc[~drop].set_index("Date")[PM10_COLS]
+    imputed = []
+    for i in daily.index[drop]:
+        day = daily.at[i, "Date"]
+        today = sd[sd["Date"] == day]
+        sites = set(today["Site ID"])
+        hist = sd[(sd["Date"] < day) & (sd["Date"] >= day - pd.Timedelta(days=365)) & sd["Site ID"].isin(sites)]
+        per_day = hist.groupby("Date")["Site ID"].nunique()
+        days_all = per_day.index[per_day == len(sites)].intersection(good.index)
+        if len(days_all) < 30:
+            continue
+        sub = hist[hist["Date"].isin(days_all)].groupby("Date")[PM10_COLS].mean()
+        ratio = (good.loc[days_all, PM10_COLS] / sub[PM10_COLS].where(sub[PM10_COLS] > 0)).median()
+        daily.loc[i, PM10_COLS] = (today[PM10_COLS].mean() * ratio)[PM10_COLS].to_numpy()
+        drop.loc[i] = False
+        imputed.append(f"{day.date()} ({len(sites)} of median {med[day.year]:g} monitors; their mean "
+                       f"{today['Daily Mean PM10 Concentration'].mean():.1f} x ratio {ratio['Daily Mean PM10 Concentration']:.2f} "
+                       f"= {daily.at[i, 'Daily Mean PM10 Concentration']:.1f} ug/m3)")
+    info["imputed_days_few_monitors"] = imputed
+    info["dropped_days_few_monitors"] = [f"{d.date()} ({n} of median {m:g})" for d, n, m in
+                                        zip(daily.loc[drop, "Date"], daily.loc[drop, "n_monitors"], year[drop].map(med))]
+    daily = daily[~drop].copy()
+    info["rule"] = (f"mean per monitor-day, then over monitors; a selected monitor continues through its AirNow rows after "
+                    f"its last AQS day; a day with fewer than max(2, ceil({PM10_MIN_MONITOR_FRAC} x yearly median)) monitors "
+                    f"is the reporting monitors' mean times their median ratio to the county mean over the previous year")
     daily["Daily Mean PM10 Concentration"] = daily["Daily Mean PM10 Concentration"].round(2)
     daily["Daily AQI Value"] = daily["Daily AQI Value"].round(1)
     daily = daily.sort_values("Date").reset_index(drop=True)
@@ -755,7 +718,7 @@ def read_pm10_folder(folder: Path, pattern: str, county: str, methods: list[int]
 # --------------------------------------------------------------------------------------------
 # 3. ADHS county workbooks -> weekly cases
 # --------------------------------------------------------------------------------------------
-def read_case_workbooks(paths: list[Path], drop_partial: bool) -> tuple[pd.DataFrame, dict]:
+def read_case_workbooks(paths: list[Path]) -> tuple[pd.DataFrame, dict]:
     """Weekly cases by county, MMWR year from the sheet name; later workbooks override years."""
     by_year: dict[int, pd.DataFrame] = {}
     provenance: dict[int, str] = {}
@@ -796,7 +759,7 @@ def read_case_workbooks(paths: list[Path], drop_partial: bool) -> tuple[pd.DataF
     for c in ("MARICOPA", "PIMA", "PINAL"):
         cases[c] = cases[c].astype(int)
     dropped = None
-    if drop_partial and len(cases) > 9:
+    if len(cases) > 9:
         last_total = cases["TOTAL"].iloc[-1]
         ref = cases["TOTAL"].iloc[-9:-1].median()
         if pd.notna(last_total) and last_total < CASES_PARTIAL_WEEK_FRAC * ref:
@@ -809,7 +772,7 @@ def read_case_workbooks(paths: list[Path], drop_partial: bool) -> tuple[pd.DataF
 # 4. merge
 # --------------------------------------------------------------------------------------------
 def assemble(county: str, cases: pd.DataFrame, weather: pd.DataFrame, pm10: pd.DataFrame,
-             end: tuple[int, int] | None, fill_weekly_gaps: bool) -> tuple[pd.DataFrame, dict]:
+             end: tuple[int, int] | None) -> tuple[pd.DataFrame, dict]:
     col = COUNTIES[county]["cases_col"]
     first = (2006, 1)
     last_cases = tuple(cases[["MMWR_Year", "MMWR_Week"]].iloc[-1].tolist())
@@ -825,11 +788,10 @@ def assemble(county: str, cases: pd.DataFrame, weather: pd.DataFrame, pm10: pd.D
     out = out.drop(columns=["MMWR_Year", "MMWR_Week", "n_days", "n_days_pm10"])
     out = out[["Date", col] + FINAL_WEATHER_COLS + PM10_COLS]
     filled = {}
-    if fill_weekly_gaps:
-        for c in FINAL_WEATHER_COLS + PM10_COLS:
-            if out[c].isna().any():
-                filled[c] = out.loc[out[c].isna(), "Date"].tolist()
-                out[c] = out[c].interpolate(method="linear", limit_direction="both")
+    for c in FINAL_WEATHER_COLS + PM10_COLS:
+        if out[c].isna().any():
+            filled[c] = out.loc[out[c].isna(), "Date"].tolist()
+            out[c] = out[c].interpolate(method="linear", limit_direction="both")
     missing = {c: int(out[c].isna().sum()) for c in out.columns if out[c].isna().any()}
     info = {"first": out["Date"].iloc[0], "last": out["Date"].iloc[-1], "rows": len(out),
             "missing_cells": missing, "partial_weeks": partial, "weekly_gaps_filled": filled}
@@ -844,17 +806,13 @@ def parse_week(s: str | None) -> tuple[int, int] | None:
     return int(y), int(w)
 
 
-def build_county(county: str, cases: pd.DataFrame, end, legacy: bool, out: Path,
+def build_county(county: str, cases: pd.DataFrame, end, out: Path,
                  weather_entry: tuple[pd.DataFrame, dict]) -> tuple[pd.DataFrame, list[str], tuple]:
     cfg = COUNTIES[county]
-    mode = "legacy rules" if legacy else "recommended rules"
     out.mkdir(parents=True, exist_ok=True)
-    log(f"\n=== {county} ({mode}) ===")
-    report = [f"## {county} ({mode})"]
+    log(f"\n=== {county} ===")
+    report = [f"## {county}"]
     daily, winfo = weather_entry
-    if winfo.get("raw_files_cleaned") is not None:
-        log(f"  raw AZMET files: trailing newline removed from {winfo['raw_files_cleaned']} file(s)")
-        report.append(f"raw AZMET files cleaned (trailing newline removed): {winfo['raw_files_cleaned']}")
     weather = weekly_weather(daily)
     log(f"  weather: {winfo['files']} files, {winfo['days']} days {winfo['first_day']}..{winfo['last_day']}, station(s) {winfo['stations']}, "
         f"skipped lines {winfo['skipped_lines']}, duplicate lines {winfo['duplicate_lines']}, 999 values {winfo['missing_values_999']}, "
@@ -867,12 +825,12 @@ def build_county(county: str, cases: pd.DataFrame, end, legacy: bool, out: Path,
         log(f"  soil gaps filled from neighbour stations: {len(winfo['soil20_fills'])} ({winfo['soil20_fills'][:3]} ...)")
     long_gaps = {c: g for c, g in winfo["gaps"].items() if g["longest_run_days"] >= 7 and c not in ("Reference ET", "Actual Vapor Pressure - Daily Mean", "Dewpoint - Daily Mean")}
     if long_gaps:
-        log(f"  gaps of a week or more (interpolated unless legacy): {long_gaps}")
+        log(f"  gaps of a week or more (filled): {long_gaps}")
     save_csv(daily, out / f"{county}_weather_daily.csv")
     save_csv(weather, out / f"{county}_weather_weekly_mmwr.csv")
 
-    methods = cfg["pm10_methods_legacy"] if legacy else cfg["pm10_methods"]
-    pm10_daily, pm10_weekly, pinfo = read_pm10_folder(cfg["pm10_dir"], cfg["pm10_glob"], cfg["pm10_county"], methods, legacy)
+    methods = cfg["pm10_methods"]
+    pm10_daily, pm10_weekly, pinfo = read_pm10_folder(cfg["pm10_dir"], cfg["pm10_glob"], cfg["pm10_county"], methods)
     log(f"  PM10: {pinfo['files']} files, methods in data {pinfo['methods_in_data']}, kept {methods} ({pinfo['monitors_selected']} monitors, "
         f"{pinfo['rows_selected']}/{pinfo['rows']} rows); AQS days to {pinfo['last_aqs_day']}; AirNow site-days used {pinfo['airnow_site_days']}"
         + (f" ({pinfo.get('airnow_first_day')}..{pinfo.get('airnow_last_day')})" if pinfo["airnow_site_days"] else "")
@@ -882,7 +840,7 @@ def build_county(county: str, cases: pd.DataFrame, end, legacy: bool, out: Path,
     save_csv(pm10_daily, out / f"{county}_pm10_daily.csv")
     save_csv(pm10_weekly, out / f"{county}_pm10_weekly_mmwr.csv")
 
-    final, finfo = assemble(county, cases, weather, pm10_weekly, end, fill_weekly_gaps=not legacy)
+    final, finfo = assemble(county, cases, weather, pm10_weekly, end)
     name = f"Clean Processed Data2_{county}.csv"
     written = save_csv(final, out / name)
     log(f"  -> {name}: {finfo['rows']} rows {finfo['first']}..{finfo['last']}, missing cells {finfo['missing_cells'] or 'none'}; "
@@ -906,7 +864,7 @@ def build_county(county: str, cases: pd.DataFrame, end, legacy: bool, out: Path,
         f"Max >= Mean >= Min enforced (days from {QC_FROM_YEAR} on): {winfo['ordering_fixes']} cells changed",
         f"PM10 rows with negative concentration set to 0: {pinfo['negative_rows_clipped']}",
         f"PM10 days with too few monitors estimated from the reporting monitors: {pinfo['imputed_days_few_monitors'] or 'none'}",
-        f"weather gaps after QC, before filling (interpolated unless legacy): {gap_text}",
+        f"weather gaps after QC, before filling: {gap_text}",
         f"PM10: methods in data {pinfo['methods_in_data']}, kept {methods} ({pinfo['monitors_selected']} monitors); rule: {pinfo['rule']}; "
         f"AQS rows to {pinfo['last_aqs_day']}; AirNow site-days used {pinfo['airnow_site_days']}; "
         f"days dropped for too few monitors: {len(pinfo['dropped_days_few_monitors'])} {pinfo['dropped_days_few_monitors'][:6]}; "
@@ -925,32 +883,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--end", default=DEFAULT_END,
                    help="last MMWR week to keep (default: %(default)s, so that all counties cover the same weeks; "
                         "'cases' = last complete week with case counts)")
-    p.add_argument("--legacy-rules", action="store_true", help="use exactly the original scripts' rules (output/legacy_rules/)")
-    p.add_argument("--fix-raw", action="store_true", help="remove trailing blank lines / final newline of the raw AZMET files")
-    p.add_argument("--out", default=None, help="output folder (default output/ or output/legacy_rules/)")
+    p.add_argument("--out", default=None, help="output folder (default: output/)")
     args = p.parse_args(argv)
-    legacy = args.legacy_rules
-    out = Path(args.out) if args.out else (OUT / "legacy_rules" if legacy else OUT)
+    out = Path(args.out) if args.out else OUT
     out.mkdir(parents=True, exist_ok=True)
     end = None if args.end == "cases" else parse_week(args.end)
 
     self_test_mmwr()
     log("MMWR week function: self-test passed (1985-2030)")
 
-    cases, cinfo = read_case_workbooks(CASE_WORKBOOKS, drop_partial=not legacy)
+    cases, cinfo = read_case_workbooks(CASE_WORKBOOKS)
     cases["Date"] = [week_label(y, w) for y, w in zip(cases["MMWR_Year"], cases["MMWR_Week"])]
     save_csv(cases[["Date", "MMWR_Year", "MMWR_Week", "MARICOPA", "PIMA", "PINAL", "TOTAL"]], out / "cases_weekly_by_county.csv")
     log(f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks); dropped partial week: {cinfo['dropped_partial_week']}")
-    report = [f"# Preprocessing report ({'legacy rules' if legacy else 'recommended rules'})", "",
+    report = ["# Preprocessing report", "",
               f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks); trailing partial week dropped: {cinfo['dropped_partial_week']}"]
     report += [f"  {y}: {cinfo['provenance'][y]}" for y in sorted(cinfo["provenance"])]
     report.append("  (the most recent weeks of the newest workbook are preliminary: ADHS revises them in later workbooks)")
 
-    weather = prepare_weather(legacy, args.counties if args.fix_raw else [])
-    finals = {}
+    weather = prepare_weather()
     for county in args.counties:
-        final, rep, parts = build_county(county, cases, end, legacy, out, weather[county])
-        finals[county] = final
+        final, rep, parts = build_county(county, cases, end, out, weather[county])
         report += [""] + rep
     save_text("\n".join(report) + "\n", out / "preprocessing_report.md")
     log(f"\nreport: {out / 'preprocessing_report.md'}")
