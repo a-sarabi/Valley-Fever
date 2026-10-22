@@ -18,11 +18,10 @@ Two rule sets:
   too few monitors is estimated from the reporting ones, and Pima uses the monitor types 79, 122 and
   127; a trailing partial case week is dropped.
 * ``--legacy-rules``: exactly the original Maricopa scripts (999 values left empty and the
-  remaining days averaged, no QC, row mean over method-79 monitors, no AirNow rows). With this
-  switch the rebuilt Maricopa file matches Data/Clean Processed Data2.csv (--verify; see README.md).
+  remaining days averaged, no QC, row mean over method-79 monitors, no AirNow rows); see README.md.
 
 Usage (from this folder):
-    python preprocess_counties.py --verify               # recommended rules for all counties + verification
+    python preprocess_counties.py                        # recommended rules for all counties -> output/
     python preprocess_counties.py --legacy-rules          # original rules for all counties -> output/legacy_rules/
     python preprocess_counties.py --counties Pima Pinal --end 2026_39
 """
@@ -54,8 +53,8 @@ OUT = HERE / "output"
 COUNTIES: dict[str, dict] = {
     "Maricopa": {
         "cases_col": "MARICOPA",
-        "azmet_dir": DATA / "Weather Data MARICOPA" / "Original Data MARICOPA",
-        "pm10_dir": DATA / "PM10 Data",
+        "azmet_dir": DATA / "Maricopa" / "Weather Data MARICOPA" / "Original Data MARICOPA",
+        "pm10_dir": DATA / "Maricopa" / "PM10 Data",
         "pm10_glob": "Maricopa *.csv",
         "pm10_county": "Maricopa",
         "pm10_methods": [79],
@@ -87,15 +86,12 @@ CASE_WORKBOOKS = [  # oldest first; a later workbook overrides the same MMWR yea
     DATA / "Valley Fever Data" / "MMWR by County (2025-26_ MMWRWK-YR).xlsx",
 ]
 
-# existing Maricopa outputs used by --verify
-EXISTING = {
-    "final": DATA / "Clean Processed Data2.csv",
-    "weather_weekly": DATA / "Weather Data MARICOPA" / "MMWR" / "weekly_aggregated_weather_data_mmwr.xlsx",
-    "pm10_daily": DATA / "PM10 Data" / "filtered_averaged_data_maricopa_new.csv",
-    "pm10_weekly": DATA / "PM10 Data" / "aggregated_mmwr_week_data.csv",
-}
 
-FINAL_WEATHER_COLS = [  # alphabetical, as in Clean Processed Data2.csv
+
+# last MMWR week of every county file: the last complete week of case counts (2026_40 is partial)
+DEFAULT_END = "2026_39"
+
+FINAL_WEATHER_COLS = [  # alphabetical, as in the original Maricopa file
     '20" Soil Temp - Max', '20" Soil Temp - Mean', '20" Soil Temp - Min',
     '4" Soil Temp - Max', '4" Soil Temp - Mean', '4" Soil Temp - Min',
     'Actual Vapor Pressure - Daily Mean', 'Air Temp - Max', 'Air Temp - Mean', 'Air Temp - Min',
@@ -841,115 +837,6 @@ def assemble(county: str, cases: pd.DataFrame, weather: pd.DataFrame, pm10: pd.D
 
 
 # --------------------------------------------------------------------------------------------
-# verification against the existing Maricopa outputs
-# --------------------------------------------------------------------------------------------
-def compare_frames(a: pd.DataFrame, b: pd.DataFrame, keys: list[str], cols: list[str], atol: float) -> dict:
-    m = a.merge(b, on=keys, suffixes=("_new", "_old"), how="outer", indicator=True)
-    res = {"rows_new": len(a), "rows_old": len(b), "rows_common": int((m["_merge"] == "both").sum()),
-           "only_new": int((m["_merge"] == "left_only").sum()), "only_old": int((m["_merge"] == "right_only").sum()),
-           "max_abs_diff": {}, "n_diff": {}, "diff_keys": set()}
-    both = m[m["_merge"] == "both"]
-    for c in cols:
-        x, y = both[f"{c}_new"].astype(float), both[f"{c}_old"].astype(float)
-        d = (x - y).abs()
-        bad = (d > atol) | (x.isna() != y.isna())
-        res["max_abs_diff"][c] = float(np.nanmax(d.values)) if d.notna().any() else float("nan")
-        res["n_diff"][c] = int(bad.sum())
-        res["diff_keys"] |= set(map(tuple, both.loc[bad, keys].values.tolist()))
-    res["n_diff_total"] = sum(res["n_diff"].values())
-    return res
-
-
-def verify_maricopa(final: pd.DataFrame, weather: pd.DataFrame, pm10_daily: pd.DataFrame,
-                    pm10_weekly: pd.DataFrame, label: str) -> str:
-    lines = [f"# Rebuilt Maricopa file ({label}) against the existing outputs", ""]
-    old = pd.read_csv(EXISTING["final"])
-    cols = [c for c in final.columns if c != "Date"]
-    r = compare_frames(final, old, ["Date"], cols, atol=1e-6)
-    weeks = sorted(k[0] for k in r["diff_keys"])
-    lines += [f"## {EXISTING['final'].name}",
-              f"rows rebuilt {r['rows_new']}, existing {r['rows_old']}, common {r['rows_common']}, only rebuilt {r['only_new']}, only existing {r['only_old']}; "
-              f"columns identical: {list(final.columns) == list(old.columns)}",
-              f"cells differing (> 1e-6 or missing on one side): {r['n_diff_total']} in {len(weeks)} weeks {weeks[:12]}{' ...' if len(weeks) > 12 else ''}"]
-    lines += [f"  {c}: max |diff| {r['max_abs_diff'][c]:.3g}, cells {r['n_diff'][c]}" for c in cols if r["n_diff"][c]]
-    oldw = pd.read_excel(EXISTING["weather_weekly"])
-    wcols = [c for c in oldw.columns if c not in ("MMWR_Year", "MMWR_Week")]
-    rw = compare_frames(weather, oldw, ["MMWR_Year", "MMWR_Week"], wcols, atol=1e-6)
-    rw6 = compare_frames(weather[weather["MMWR_Year"] >= 2006], oldw[oldw["MMWR_Year"] >= 2006], ["MMWR_Year", "MMWR_Week"], wcols, atol=1e-6)
-    note = (" (before 2006 the three columns absent from the 1987-2002 format are empty in the existing file and interpolated "
-            "here under the recommended rules)" if rw["n_diff_total"] > rw6["n_diff_total"] else "")
-    lines += ["", f"## {EXISTING['weather_weekly'].name}",
-              f"rows rebuilt {rw['rows_new']}, existing {rw['rows_old']}, common {rw['rows_common']}; cells differing {rw['n_diff_total']}, "
-              f"from 2006 on {rw6['n_diff_total']} cells in {len(rw6['diff_keys'])} weeks{note}"]
-    oldd = pd.read_csv(EXISTING["pm10_daily"], parse_dates=["Date"])
-    rd = compare_frames(pm10_daily, oldd, ["Date"], PM10_COLS, atol=1e-6)
-    oldk = pd.read_csv(EXISTING["pm10_weekly"])
-    rk = compare_frames(pm10_weekly, oldk, ["MMWR_Year", "MMWR_Week"], PM10_COLS, atol=1e-6)
-    lines += ["", f"## {EXISTING['pm10_daily'].name}",
-              f"days rebuilt {rd['rows_new']}, existing {rd['rows_old']}, common {rd['rows_common']}, only rebuilt {rd['only_new']}, only existing {rd['only_old']}; "
-              f"cells differing {rd['n_diff_total']}",
-              "", f"## {EXISTING['pm10_weekly'].name}",
-              f"weeks rebuilt {rk['rows_new']}, existing {rk['rows_old']}, common {rk['rows_common']}; cells differing {rk['n_diff_total']} "
-              f"in weeks {sorted(week_label(*k) for k in rk['diff_keys'])[:12]}"]
-    return "\n".join(lines) + "\n"
-
-
-def explain_maricopa_differences(rec: pd.DataFrame, leg: pd.DataFrame, daily_rec: pd.DataFrame,
-                                 daily_leg: pd.DataFrame, threshold: float = 1.0) -> pd.DataFrame:
-    """Every cell where the recommended Maricopa file differs from the existing file by more than
-    ``threshold``, with its value in the existing file, the legacy rebuild and the recommended file, and
-    the cause (inferred from the legacy rebuild and the daily weather tables)."""
-    E = pd.read_csv(EXISTING["final"]).set_index("Date")
-    R, L = rec.set_index("Date"), leg.set_index("Date")
-    dR, dL = daily_rec.copy(), daily_leg.copy()
-    for d in (dR, dL):
-        d["wk"] = [week_label(y, k) for y, k in zip(d["MMWR_Year"], d["MMWR_Week"])]
-    dR, dL = dR.set_index("Date"), dL.set_index("Date")
-    colmap = {"Reference ET Penman-Monteith": "Reference ET (Penman-Monteith)"}
-    cols = [c for c in E.columns]
-    big = (R[cols] - E[cols]).abs() > threshold
-    rows = []
-    for wk in big.index[big.any(axis=1)]:
-        for c in [c for c in cols if big.loc[wk, c]]:
-            repair = abs(L.loc[wk, c] - E.loc[wk, c]) > 1e-6
-            rule = abs(R.loc[wk, c] - L.loc[wk, c]) > 1e-6
-            if c in PM10_COLS:
-                cause = ("PM10: 2026 preliminary AirNow rows of monitors whose quality-assured feed stopped on 2026-06-30"
-                         if wk.startswith("2026_") else "PM10: collocated instruments counted once (mean per monitor, then over monitors)")
-            else:
-                dc = colmap.get(c, c)
-                a, b = dL[dL["wk"] == wk][dc], dR[dR["wk"] == wk][dc]
-                kinds = set()
-                for day in b.index[(a.reindex(b.index) - b).abs().fillna(np.inf) > 1e-9]:
-                    kinds.add("999 in raw file, filled (original script dropped the day)" if pd.isna(a.get(day, np.nan))
-                              else "QC: implausible daily reading set to missing and filled")
-                if repair and not rule:
-                    kinds = {"2024 raw file repaired (2024-12-31 was missing from the old 0624rd.txt)"}
-                elif repair:
-                    kinds.add("2024 raw file repaired")
-                cause = "; ".join(sorted(kinds))
-            rows.append({"week": wk, "column": c, "existing_file": round(float(E.loc[wk, c]), 3),
-                         "legacy_rules_rebuild": round(float(L.loc[wk, c]), 3), "recommended_rules": round(float(R.loc[wk, c]), 3),
-                         "cause": cause})
-    return pd.DataFrame(rows).sort_values(["cause", "week", "column"]).reset_index(drop=True)
-
-
-def compare_variants(a: pd.DataFrame, b: pd.DataFrame, county: str) -> str:
-    """Summarise how the recommended file differs from the legacy-rules file."""
-    cols = [c for c in a.columns if c != "Date"]
-    r = compare_frames(a, b, ["Date"], cols, atol=1e-6)
-    lines = [f"{county}: {r['n_diff_total']} cells differ in {len(r['diff_keys'])} of {r['rows_common']} weeks"]
-    for c in cols:
-        if r["n_diff"][c]:
-            m = a.merge(b, on="Date", suffixes=("_r", "_l"))
-            d = (m[f"{c}_r"] - m[f"{c}_l"])
-            worst = m.loc[d.abs().idxmax(), "Date"]
-            lines.append(f"  {c}: {r['n_diff'][c]} weeks, largest change {d.abs().max():.3g} in {worst} "
-                         f"(recommended {m.loc[d.abs().idxmax(), f'{c}_r']:.3g}, legacy {m.loc[d.abs().idxmax(), f'{c}_l']:.3g})")
-    return "\n".join(lines)
-
-
-# --------------------------------------------------------------------------------------------
 def parse_week(s: str | None) -> tuple[int, int] | None:
     if not s:
         return None
@@ -1035,11 +922,9 @@ def build_county(county: str, cases: pd.DataFrame, end, legacy: bool, out: Path,
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--counties", nargs="+", default=list(COUNTIES), choices=list(COUNTIES))
-    p.add_argument("--end", default=None,
-                   help="last MMWR week to keep, e.g. 2026_39 (default: the last week of the existing Maricopa file so that "
-                        "all counties cover the same weeks; 'cases' = last complete week with case counts)")
-    p.add_argument("--verify", action="store_true",
-                   help="also rebuild Maricopa with the legacy rules and compare with the existing outputs")
+    p.add_argument("--end", default=DEFAULT_END,
+                   help="last MMWR week to keep (default: %(default)s, so that all counties cover the same weeks; "
+                        "'cases' = last complete week with case counts)")
     p.add_argument("--legacy-rules", action="store_true", help="use exactly the original scripts' rules (output/legacy_rules/)")
     p.add_argument("--fix-raw", action="store_true", help="remove trailing blank lines / final newline of the raw AZMET files")
     p.add_argument("--out", default=None, help="output folder (default output/ or output/legacy_rules/)")
@@ -1047,13 +932,7 @@ def main(argv: list[str] | None = None) -> int:
     legacy = args.legacy_rules
     out = Path(args.out) if args.out else (OUT / "legacy_rules" if legacy else OUT)
     out.mkdir(parents=True, exist_ok=True)
-    if args.end is None and EXISTING["final"].exists():
-        end = parse_week(str(pd.read_csv(EXISTING["final"], usecols=["Date"])["Date"].iloc[-1]))
-        log(f"last week taken from {EXISTING['final'].name}: {week_label(*end)}")
-    elif args.end in (None, "cases"):
-        end = None
-    else:
-        end = parse_week(args.end)
+    end = None if args.end == "cases" else parse_week(args.end)
 
     self_test_mmwr()
     log("MMWR week function: self-test passed (1985-2030)")
@@ -1073,25 +952,6 @@ def main(argv: list[str] | None = None) -> int:
         final, rep, parts = build_county(county, cases, end, legacy, out, weather[county])
         finals[county] = final
         report += [""] + rep
-        if args.verify and county == "Maricopa":
-            texts = []
-            if legacy:
-                texts.append(verify_maricopa(final, parts[0], parts[1], parts[2], "legacy rules"))
-            else:
-                texts.append(verify_maricopa(final, parts[0], parts[1], parts[2], "recommended rules"))
-                cases_l, _ = read_case_workbooks(CASE_WORKBOOKS, drop_partial=False)
-                weather_l = prepare_weather(True, [])["Maricopa"]
-                final_l, _, parts_l = build_county("Maricopa", cases_l, end, True, out / "legacy_rules", weather_l)
-                texts.append(verify_maricopa(final_l, parts_l[0], parts_l[1], parts_l[2], "legacy rules"))
-                texts.append("# Recommended rules against legacy rules\n\n" + compare_variants(final, final_l, "Maricopa") + "\n")
-                expl = explain_maricopa_differences(final, final_l, weather["Maricopa"][0], weather_l[0])
-                save_csv(expl, out / "maricopa_differences_explained.csv")
-                summary = expl.groupby("cause").agg(cells=("week", "size"), weeks=("week", "nunique"))
-                texts.append("# Cells differing from the existing file by more than 1 (maricopa_differences_explained.csv)\n\n"
-                             f"{len(expl)} cells in {expl['week'].nunique()} weeks\n\n" + summary.to_string() + "\n")
-            text = "\n\n".join(texts)
-            save_text(text, out / "verification_maricopa.md")
-            log("\n" + text)
     save_text("\n".join(report) + "\n", out / "preprocessing_report.md")
     log(f"\nreport: {out / 'preprocessing_report.md'}")
     return 0

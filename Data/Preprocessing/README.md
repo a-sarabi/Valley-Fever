@@ -1,10 +1,9 @@
 # County preprocessing (Maricopa, Pima, Pinal) to MMWR weeks
 
-`preprocess_counties.py` merges the three Maricopa preprocessing scripts
-(`Processing Climate Date -Weeky Aggregate - MMWR.py`, `filtered_averaged_data_maricopa.py` and the
-case-workbook assembly) into one program and runs the same steps for every county. Every final
-file has exactly the layout of the earlier Maricopa file, `Data/Clean Processed Data2.csv` (called
-the existing file below):
+`preprocess_counties.py` replaces the three original Maricopa preprocessing scripts (weather, PM10
+and case workbooks) with one program and runs the same steps for every county. The weekly Maricopa
+file those scripts made is called the existing file below; neither the scripts nor that file are in
+this repository. Every final file has the existing file's layout:
 
 ```
 Date, <COUNTY cases>, 25 AZMET weather columns (alphabetical), Daily AQI Value, Daily Mean PM10 Concentration
@@ -19,7 +18,7 @@ and openpyxl 3.1). The `output/` folder is not tracked by git.
 
 ```
 cd Data/Preprocessing
-python preprocess_counties.py --verify          # recommended rules, all counties -> output/, plus the Maricopa check
+python preprocess_counties.py                   # recommended rules, all counties -> output/
 python preprocess_counties.py --legacy-rules    # the original scripts' rules, all counties -> output/legacy_rules/
 python preprocess_counties.py --counties Pima Pinal --end 2026_39
 ```
@@ -36,8 +35,6 @@ station with the other two. If an output file is open in Excel, the script write
 | `<County>_pm10_daily.csv`, `<County>_pm10_weekly_mmwr.csv` | monitor-averaged daily PM10/AQI (`n_monitors`, `n_airnow`) and MMWR-week means |
 | `cases_weekly_by_county.csv` | weekly cases for MARICOPA, PIMA, PINAL and the statewide total |
 | `preprocessing_report.md` | what was read, flagged, filled, estimated or dropped, per county |
-| `verification_maricopa.md` | rebuilt Maricopa file against the existing outputs, under both rule sets |
-| `maricopa_differences_explained.csv` | written by `--verify`: every cell where the recommended Maricopa file differs from the existing one by more than 1, with the three values and the cause |
 
 The files `output/Clean Processed Data2_<County>.csv` are the ones in `Data/Processed Data/`.
 
@@ -56,8 +53,8 @@ The files `output/Clean Processed Data2_<County>.csv` are the ones in `Data/Proc
    the MMWR calendar). A newer workbook overrides an older one for the same year: 2006-2023 from
    `MMWR by County (2006-2024).xlsx`, 2024 from `(2024-2025_ Updated)`, 2025-2026 from
    `(2025-26_ MMWRWK-YR)`.
-4. **Merge** on MMWR year and week from 2006_1 to the last week of the existing Maricopa file
-   (2026_39, option `--end`), so that all counties cover the same weeks.
+4. **Merge** on MMWR year and week from 2006_1 to 2026_39 (option `--end`), the last complete week of
+   case counts and the last week of the existing file, so that all counties cover the same weeks.
 
 `--fix-raw` removes the blank line / newline at the end of every raw AZMET `.txt` file in place. It
 is optional, because the parser ignores such lines. The Maricopa file `0624rd.txt` was first a
@@ -66,10 +63,10 @@ from the AZMET server, which changes week 2025_1 in every Maricopa variant.
 
 ## The two rule sets
 
-`--legacy-rules` reproduces the original scripts exactly. With it the rebuilt Maricopa file is
-identical to the existing file in 1082 of 1083 weeks (week 2025_1 differs
-because of the repaired raw file; before the repair all 1083 weeks were identical), and the daily
-and weekly PM10 files are identical to the existing ones. Under these rules the Pima and Pinal
+`--legacy-rules` reproduces the original scripts exactly. With it the rebuilt Maricopa file was
+identical to the existing file in 1082 of 1083 weeks (week 2025_1 differs because of the repaired
+raw file; before the repair all 1083 weeks were identical), and the daily and weekly PM10 files were
+identical to those of the original scripts. Under these rules the Pima and Pinal
 files have empty cells: 13 PM10 weeks in 2026 (no quality-assured rows after June 2026) and, for
 Pinal, 9 weeks of 20" soil temperature in 2021 (sensor out).
 
@@ -117,8 +114,7 @@ Settings per county:
 
 Maricopa, against the legacy rebuild from the same raw files: 300 of 30,324 cells in 116 of 1083
 weeks change (against the existing file: 324 cells in 117 weeks, the extra week being 2025_1;
-94 cells in 59 weeks change by more than 1, listed with their cause in
-`output/maricopa_differences_explained.csv`).
+94 cells in 59 weeks change by more than 1).
 * 20" soil temperature in 54 weeks (2008-2009, 2016-2018, 2022 and 2024-2026; mostly single spike
   days of the station's watering pattern and the day after; at most 2.6 C on the weekly Max).
 * PM10/AQI in 66 weeks: collocated-instrument averaging in 2007-2013 (at most 4.3 ug/m3) and the 14
@@ -140,9 +136,6 @@ wind direction 2023_20 and 2026_15); two Max >= Mean >= Min fixes on raw 20" day
 
 * The MMWR week function is self-tested against an independent implementation of the CDC rule for
   every day 1985-2030 (MMWR years 2008, 2014, 2020 and 2025 have 53 weeks within the data range).
-* `--verify` rebuilds Maricopa with both rule sets, compares the final file, the weekly weather
-  file, and the daily and weekly PM10 files with the existing outputs (NaN-aware, outer join), and
-  writes `maricopa_differences_explained.csv`.
 * `preprocessing_report.md` lists, per county, the raw-file statistics, every station and
   neighbour QC flag with example dates, the total missing days of each column and its longest gap
   when that gap is three days or more, every soil-temperature gap filled from the neighbours, the
