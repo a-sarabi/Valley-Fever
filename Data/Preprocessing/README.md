@@ -11,8 +11,10 @@ with 1083 rows (MMWR weeks 2006_1 .. 2026_39) and no missing cells.
 
 ## Run
 
-Requires Python 3 with pandas and numpy (tested with Python 3.13, pandas 2.2 and numpy 2.2).
-The `output/` folder is not tracked by git.
+Requires Python 3.9 or newer with numpy and pandas 1.5 or newer. The rebuilt files are identical byte for byte with
+Python 3.9, 3.11 and 3.13, pandas 1.5.3 to 3.1.0 and numpy 1.26 to 2.5, on every operating system: the program writes
+LF line endings, and `.gitattributes` makes Git check out the CSV files with LF line endings too. The `output/` folder
+is not tracked by git.
 
 ```
 cd Data/Preprocessing
@@ -41,7 +43,8 @@ The program writes these files to `output/`:
 2. **PM10 / AQI.** EPA AirData daily files are filtered to the county and to the monitor method codes below,
    averaged per monitor-day and then over monitors (PM10 rounded to 2 decimals, AQI to 1), and over the days of each
    MMWR week.
-3. **Cases.** The weekly counts are read from `Data/Valley Fever Data/cases_weekly_by_county.csv`. They were taken
+3. **Cases.** The weekly counts are read from `Data/Valley Fever Data/cases_weekly_by_county.csv` and checked (see
+   Checks built in). They were taken
    from the ADHS "MMWR by County" workbooks, which are not in this repository: sheet by sheet (MMWR year from the
    sheet name, header row found by the county names, `Total` rows ignored, week numbers checked against the MMWR
    calendar), with a newer workbook overriding an older one for the same year (2006-2023 from
@@ -142,6 +145,11 @@ Settings per county:
 
 ## Checks built in
 
+* The case file must have the columns `Date`, `MMWR_Year`, `MMWR_Week`, `MARICOPA`, `PIMA` and `PINAL`, whole-number
+  counts that are not negative, consecutive MMWR weeks in order and a `Date` that matches `MMWR_Year` and `MMWR_Week`;
+  otherwise the program stops with a message.
+* `--end` must be a week written YEAR_WEEK, from 2006_1 on and within its MMWR year; otherwise the program stops with a
+  usage message. A week after the last week of case counts ends the files at that last week, with a note.
 * The MMWR week function is self-tested against an independent implementation of the CDC rule for every day
   1985-2030 (MMWR years 2008, 2014, 2020 and 2025 have 53 weeks within the data range).
 * `preprocessing_report.md` lists, per county, the raw-file statistics, every station and neighbour QC flag with
