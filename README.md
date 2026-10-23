@@ -15,7 +15,7 @@ Weekly Valley fever (coccidioidomycosis) case counts for Maricopa, Pima and Pina
 
 ## Using the data
 
-Each processed file has one row per MMWR week, with the county's weekly number of cases, 25 weather variables, PM10 and the air quality index (AQI). For example, in Python:
+Each processed file has one row per MMWR week, with the county's weekly number of cases, 25 weather variables, PM10 and the air quality index (AQI). For example, in Python, started in the repository's top folder:
 
 ```python
 import pandas as pd
@@ -23,17 +23,43 @@ import pandas as pd
 pima = pd.read_csv("Data/Processed Data/Clean Processed Data2_Pima.csv")
 ```
 
-To rebuild the processed files from the original data (Python 3.9 or newer):
+## Rebuilding the processed files
+
+The program in `Data/Preprocessing/` rebuilds the processed files from the original data and checks that they are
+identical, byte for byte, to those in `Data/Processed Data/`. You need Python 3.9 or newer. Run the commands below in
+the repository's top folder, the one that contains `requirements.txt` (after Download ZIP it is called
+`Valley-Fever-main`). They install numpy and pandas in a separate environment, `.venv`, so nothing else on your
+computer changes.
+
+macOS and Linux:
 
 ```
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 cd Data/Preprocessing
 python preprocess_counties.py --check
 ```
 
-The program writes the files to `Data/Preprocessing/output/` and checks that they are identical, byte for byte, to
-those in `Data/Processed Data/`; with `--check` it stops with an error if they are not. GitHub repeats this check on
-Linux, macOS and Windows after every change, and the badge above shows the result.
+Windows (PowerShell or Command Prompt):
+
+```
+py -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+cd Data\Preprocessing
+python preprocess_counties.py --check
+```
+
+A successful run ends with three lines such as
+`Clean Processed Data2_Pima.csv: identical to Data/Processed Data/Clean Processed Data2_Pima.csv`. With `--check`, the
+program stops with an error (exit status 1) if a file differs. If PowerShell says that running scripts is disabled,
+run `Set-ExecutionPolicy -Scope Process RemoteSigned` first; if Git on Windows reports "Filename too long" when
+cloning, clone into a shorter folder such as `C:\src`.
+
+GitHub repeats this check on Linux, macOS and Windows after every change and every Monday; the badge above shows the
+result. If a newer numpy or pandas release ever makes a file differ, install the versions shown in the "Show the
+versions" step of the last passing run (now numpy 2.5.4 and pandas 3.1.0 with Python 3.13).
 
 ## Sources
 

@@ -11,22 +11,26 @@ with 1083 rows (MMWR weeks 2006_1 .. 2026_39) and no missing cells.
 
 ## Run
 
-Requires Python 3.9 or newer with numpy and pandas 1.5.3 or newer; `pip install -r requirements.txt` in the
-repository root installs them. The `output/` folder is not tracked by git.
+Requires Python 3.9 or newer, numpy 1.26 or newer and pandas 1.5.3 or newer; the commands in the top-level
+`README.md` install them in a separate environment. The `output/` folder is not tracked by git.
 
 ```
 cd Data/Preprocessing
-python preprocess_counties.py                                     # all counties -> output/
-python preprocess_counties.py --check                             # the same; exit status 1 if a file differs
+python preprocess_counties.py
+python preprocess_counties.py --check
 python preprocess_counties.py --counties Pima Pinal --end 2026_39
 ```
 
+The first command builds all counties into `output/`; `--check` does the same and ends with exit status 1 if a file
+differs from `Data/Processed Data/`; the last builds only Pima and Pinal, up to MMWR week 2026_39.
+
 Every run ends by comparing its final files with those in `Data/Processed Data/`, byte for byte, and prints
-`identical to` or `DIFFERS from` for each county. The files are identical with Python 3.9, 3.11 and 3.13, pandas 1.5.3
-to 3.1.0 and numpy 1.26 to 2.5: the weekly means do not depend on the pandas version, the program writes LF line
-endings, and `.gitattributes` makes Git check out the CSV files with LF line endings on every system. The GitHub
-workflow `.github/workflows/reproduce.yml` reruns `python preprocess_counties.py --check` from a fresh checkout on
-Linux, macOS and Windows, with Python 3.9 and 3.13, after every change.
+`identical to` or `DIFFERS from` for each county. The files were identical in every test: on Windows with Python 3.9,
+3.11 and 3.13, pandas 1.5.3 to 3.1.0 and numpy 1.26 to 2.5, and on Linux and macOS with Python 3.9 and 3.13 and the
+newest numpy and pandas for them. The weekly means do not depend on the pandas version, the program writes its files
+with LF line endings, and `.gitattributes` makes Git check out the CSV files with LF line endings on every system. The
+GitHub workflow `.github/workflows/reproduce.yml` reruns `python preprocess_counties.py --check` from a fresh checkout
+on Linux, macOS and Windows, with Python 3.9 and 3.13, after every change and every Monday.
 
 The weather of all three stations is always read, because the cleaning rules compare each station with the other
 two. If an output file is open in Excel, the script writes `<name>.new.csv` (or `.new.md`) instead and says so.
