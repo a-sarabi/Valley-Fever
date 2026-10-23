@@ -21,7 +21,7 @@ import pandas as pd
 pima = pd.read_csv("Data/Processed Data/Clean Processed Data2_Pima.csv")
 ```
 
-To rebuild the processed files from the original data (Python 3 with pandas and numpy):
+To rebuild the processed files from the original data (Python 3.9 or newer, with numpy and pandas 1.5 or newer):
 
 ```
 cd Data/Preprocessing

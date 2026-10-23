@@ -76,9 +76,7 @@ COUNTIES: dict[str, dict] = {
 # workbooks, which are not in this repository (see README.md)
 CASES_CSV = DATA / "Valley Fever Data" / "cases_weekly_by_county.csv"
 
-
-
-# last MMWR week of every county file: the last complete week of case counts (2026_40 is partial)
+# last MMWR week of every county file: the last week in cases_weekly_by_county.csv
 DEFAULT_END = "2026_39"
 
 FINAL_WEATHER_COLS = [  # alphabetical, as in the original Maricopa file
@@ -94,7 +92,7 @@ PM10_COLS = ["Daily AQI Value", "Daily Mean PM10 Concentration"]
 SOIL20 = ['20" Soil Temp - Max', '20" Soil Temp - Min', '20" Soil Temp - Mean']
 WIND_DIR = ["Wind Direction Std Dev", "Wind Vector Direction", "Wind Vector Magnitude"]
 
-# Daily weather plausibility rules (recommended mode). A flagged value is set to missing and then
+# Daily weather plausibility rules. A flagged value is set to missing and then
 # filled (20" soil from the neighbour stations, everything else by linear interpolation).
 # Thresholds were calibrated on the three stations (see README.md).
 SOIL4 = ['4" Soil Temp - Max', '4" Soil Temp - Min', '4" Soil Temp - Mean']
@@ -159,11 +157,11 @@ def save_text(text: str, path: Path) -> Path:
 def save_csv(df: pd.DataFrame, path: Path) -> Path:
     """Write ``df`` to ``path``; if the file is locked (open in Excel), write ``<name>.new.csv`` instead."""
     try:
-        df.to_csv(path, index=False)
+        df.to_csv(path, index=False, lineterminator="\n")
         return path
     except PermissionError:
         alt = path.with_name(path.stem + ".new.csv")
-        df.to_csv(alt, index=False)
+        df.to_csv(alt, index=False, lineterminator="\n")
         log(f"  WARNING: {path.name} is locked by another program; written to {alt.name} instead")
         return alt
 
@@ -596,11 +594,32 @@ def prepare_weather() -> dict[str, tuple[pd.DataFrame, dict]]:
     return out
 
 
+def mean_by_week(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Mean of ``cols`` over the rows of each MMWR week (missing values skipped), with compensated (Kahan) summation
+    in row order as in pandas up to 3.0, so that the result does not depend on the installed pandas version."""
+    g = df.groupby(["MMWR_Year", "MMWR_Week"])
+    idx, pos = g.ngroup().to_numpy(), g.cumcount().to_numpy()
+    out = g.size().reset_index()[["MMWR_Year", "MMWR_Week"]]
+    for col in cols:
+        a = np.full((idx.max() + 1, pos.max() + 1), np.nan)
+        a[idx, pos] = df[col].to_numpy(dtype=float)
+        s, c, n = np.zeros(len(a)), np.zeros(len(a)), np.zeros(len(a))
+        for k in range(a.shape[1]):
+            v = a[:, k]
+            ok = ~np.isnan(v)
+            y = v - c
+            t = s + y
+            c = np.where(ok, (t - s) - y, c)
+            s = np.where(ok, t, s)
+            n += ok
+        out[col] = np.where(n > 0, s / np.maximum(n, 1), np.nan)
+    return out
+
+
 def weekly_weather(daily: pd.DataFrame) -> pd.DataFrame:
     """Mean over the days of each MMWR week of every numeric column (original logic)."""
-    numeric = daily.select_dtypes(include="number").columns.difference(["MMWR_Year", "MMWR_Week"]).tolist()
-    weekly = daily.groupby(["MMWR_Year", "MMWR_Week"])[numeric].mean().reset_index()
-    weekly = weekly.drop(columns=[c for c in ("Day of Year", "Year") if c in weekly.columns])
+    numeric = daily.select_dtypes(include="number").columns.difference(["MMWR_Year", "MMWR_Week", "Day of Year", "Year"]).tolist()
+    weekly = mean_by_week(daily, numeric)
     weekly["n_days"] = daily.groupby(["MMWR_Year", "MMWR_Week"]).size().values
     return weekly
 
@@ -706,7 +725,7 @@ def read_pm10_folder(folder: Path, pattern: str, county: str,
     full = pd.date_range(daily["Date"].min(), daily["Date"].max(), freq="D")
     info["missing_days"] = int(len(full) - len(daily))
     daily = add_mmwr(daily)
-    weekly = daily.groupby(["MMWR_Year", "MMWR_Week"])[PM10_COLS].mean().reset_index()
+    weekly = mean_by_week(daily, PM10_COLS)
     weekly["n_days"] = daily.groupby(["MMWR_Year", "MMWR_Week"]).size().values
     weekly["monitors_mean"] = daily.groupby(["MMWR_Year", "MMWR_Week"])["n_monitors"].mean().round(1).values
     return daily, weekly, info
@@ -716,8 +735,31 @@ def read_pm10_folder(folder: Path, pattern: str, county: str,
 # 3. weekly cases
 # --------------------------------------------------------------------------------------------
 def read_cases(path: Path) -> pd.DataFrame:
-    """Weekly cases: columns Date, MMWR_Year, MMWR_Week, MARICOPA, PIMA, PINAL and TOTAL (statewide)."""
-    return pd.read_csv(path)
+    """Weekly cases: columns Date, MMWR_Year, MMWR_Week, MARICOPA, PIMA and PINAL (the statewide TOTAL is not used).
+
+    Stops with a message if a column is missing, a count is empty, negative or not a whole number, the rows are not
+    consecutive MMWR weeks in order, or Date does not match MMWR_Year and MMWR_Week.
+    """
+    cases = pd.read_csv(path)
+    counties = [cfg["cases_col"] for cfg in COUNTIES.values()]
+    missing = [c for c in ["Date", "MMWR_Year", "MMWR_Week"] + counties if c not in cases.columns]
+    if missing:
+        raise SystemExit(f"{path.name}: missing columns {missing}")
+    bad = [c for c in ["MMWR_Year", "MMWR_Week"] + counties
+           if cases[c].isna().any() or not pd.api.types.is_integer_dtype(cases[c])]
+    if bad:
+        raise SystemExit(f"{path.name}: empty or non-integer values in {bad}")
+    negative = [c for c in counties if (cases[c] < 0).any()]
+    if negative:
+        raise SystemExit(f"{path.name}: negative counts in {negative}")
+    keys = list(zip(cases["MMWR_Year"].tolist(), cases["MMWR_Week"].tolist()))
+    cal = mmwr_calendar(keys[0], keys[-1])
+    if keys != list(zip(cal["MMWR_Year"].tolist(), cal["MMWR_Week"].tolist())):
+        raise SystemExit(f"{path.name}: the rows are not consecutive MMWR weeks in order "
+                         "(a week is duplicated, missing or out of order)")
+    if (cases["Date"].astype(str) != [week_label(y, w) for y, w in keys]).any():
+        raise SystemExit(f"{path.name}: Date does not match MMWR_Year and MMWR_Week")
+    return cases
 
 
 # --------------------------------------------------------------------------------------------
@@ -751,15 +793,21 @@ def assemble(county: str, cases: pd.DataFrame, weather: pd.DataFrame, pm10: pd.D
 
 
 # --------------------------------------------------------------------------------------------
-def parse_week(s: str | None) -> tuple[int, int] | None:
-    if not s:
-        return None
-    y, w = s.split("_")
-    return int(y), int(w)
+def parse_week(s: str) -> tuple[int, int]:
+    """'2026_39' -> (2026, 39); the argparse type of --end, so that a wrong value gives a usage error."""
+    m = re.fullmatch(r"(\d{4})_(\d{1,2})", s.strip())
+    if not m:
+        raise argparse.ArgumentTypeError(f"{s!r} is not an MMWR week written YEAR_WEEK, such as 2026_39")
+    year, week = int(m.group(1)), int(m.group(2))
+    if (year, week) < (2006, 1):
+        raise argparse.ArgumentTypeError(f"{s!r} is before the first week of the data, 2006_1")
+    if not 1 <= week <= weeks_in_mmwr_year(year):
+        raise argparse.ArgumentTypeError(f"MMWR year {year} has weeks 1 to {weeks_in_mmwr_year(year)}, not {week}")
+    return year, week
 
 
 def build_county(county: str, cases: pd.DataFrame, end, out: Path,
-                 weather_entry: tuple[pd.DataFrame, dict]) -> tuple[pd.DataFrame, list[str], tuple]:
+                 weather_entry: tuple[pd.DataFrame, dict]) -> list[str]:
     cfg = COUNTIES[county]
     out.mkdir(parents=True, exist_ok=True)
     log(f"\n=== {county} ===")
@@ -795,7 +843,7 @@ def build_county(county: str, cases: pd.DataFrame, end, out: Path,
     final, finfo = assemble(county, cases, weather, pm10_weekly, end)
     name = f"Clean Processed Data2_{county}.csv"
     written = save_csv(final, out / name)
-    log(f"  -> {name}: {finfo['rows']} rows {finfo['first']}..{finfo['last']}, missing cells {finfo['missing_cells'] or 'none'}; "
+    log(f"  -> {written.name}: {finfo['rows']} rows {finfo['first']}..{finfo['last']}, missing cells {finfo['missing_cells'] or 'none'}; "
         f"weeks with fewer than 7 weather days {len(finfo['partial_weeks']['weather'])}, PM10 days {len(finfo['partial_weeks']['pm10'])}; "
         f"weekly gaps filled {({k: len(v) for k, v in finfo['weekly_gaps_filled'].items()}) or 'none'}")
 
@@ -821,41 +869,43 @@ def build_county(county: str, cases: pd.DataFrame, end, out: Path,
         f"AQS rows to {pinfo['last_aqs_day']}; AirNow site-days used {pinfo['airnow_site_days']}; "
         f"days dropped for too few monitors: {len(pinfo['dropped_days_few_monitors'])} {pinfo['dropped_days_few_monitors'][:6]}; "
         f"days without a value: {pinfo['missing_days']}",
-        f"final: {name}, {finfo['rows']} rows {finfo['first']}..{finfo['last']}, missing cells {finfo['missing_cells'] or 'none'}",
+        f"final: {written.name}, {finfo['rows']} rows {finfo['first']}..{finfo['last']}, missing cells {finfo['missing_cells'] or 'none'}",
         f"weeks built from fewer than 7 weather days: {finfo['partial_weeks']['weather'] or 'none'}",
         f"weeks built from fewer than 7 PM10 days: {len(finfo['partial_weeks']['pm10'])} {finfo['partial_weeks']['pm10']}",
         f"weekly values interpolated because a whole week was missing: {finfo['weekly_gaps_filled'] or 'none'}",
     ]
-    return final, report, (weather, pm10_daily, pm10_weekly)
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--counties", nargs="+", default=list(COUNTIES), choices=list(COUNTIES))
-    p.add_argument("--end", default=DEFAULT_END,
-                   help="last MMWR week to keep (default: %(default)s, so that all counties cover the same weeks; "
-                        "'cases' = last complete week with case counts)")
+    p.add_argument("--end", default=DEFAULT_END, type=lambda s: s if s == "cases" else parse_week(s),
+                   help="last MMWR week to keep, written YEAR_WEEK (default: %(default)s, so that all counties cover the same weeks; "
+                        "'cases' = the last week in cases_weekly_by_county.csv)")
     p.add_argument("--out", default=None, help="output folder (default: output/)")
     args = p.parse_args(argv)
     out = Path(args.out) if args.out else OUT
     out.mkdir(parents=True, exist_ok=True)
-    end = None if args.end == "cases" else parse_week(args.end)
+    end = None if args.end == "cases" else args.end
 
     self_test_mmwr()
     log("MMWR week function: self-test passed (1985-2030)")
 
     cases = read_cases(CASES_CSV)
     log(f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks) from {CASES_CSV.name}")
+    last_cases = (int(cases["MMWR_Year"].iloc[-1]), int(cases["MMWR_Week"].iloc[-1]))
+    if end and end > last_cases:
+        log(f"note: --end {week_label(*end)} is after the last week of case counts; the files end at {week_label(*last_cases)}")
     report = ["# Preprocessing report", "",
               f"cases: {cases.Date.iloc[0]} .. {cases.Date.iloc[-1]} ({len(cases)} weeks) from {CASES_CSV.name}",
               "  (the most recent weeks are preliminary: ADHS revises them in later workbooks)"]
 
     weather = prepare_weather()
     for county in args.counties:
-        final, rep, parts = build_county(county, cases, end, out, weather[county])
-        report += [""] + rep
-    save_text("\n".join(report) + "\n", out / "preprocessing_report.md")
-    log(f"\nreport: {out / 'preprocessing_report.md'}")
+        report += [""] + build_county(county, cases, end, out, weather[county])
+    report_path = save_text("\n".join(report) + "\n", out / "preprocessing_report.md")
+    log(f"\nreport: {report_path}")
     return 0
 
 
