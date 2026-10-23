@@ -1,5 +1,7 @@
 # Valley Fever, Weather and PM10 Data for Three Arizona Counties
 
+[![Rebuild processed data](https://github.com/a-sarabi/Valley-Fever/actions/workflows/reproduce.yml/badge.svg)](https://github.com/a-sarabi/Valley-Fever/actions/workflows/reproduce.yml)
+
 Weekly Valley fever (coccidioidomycosis) case counts for Maricopa, Pima and Pinal counties, Arizona, with weekly weather and PM10 (dust) data. The data cover MMWR weeks 2006_1 to 2026_39 (1 January 2006 to 3 October 2026).
 
 ## Contents
@@ -21,14 +23,17 @@ import pandas as pd
 pima = pd.read_csv("Data/Processed Data/Clean Processed Data2_Pima.csv")
 ```
 
-To rebuild the processed files from the original data (Python 3.9 or newer, with numpy and pandas 1.5 or newer):
+To rebuild the processed files from the original data (Python 3.9 or newer):
 
 ```
+pip install -r requirements.txt
 cd Data/Preprocessing
-python preprocess_counties.py
+python preprocess_counties.py --check
 ```
 
-The program writes the files to `Data/Preprocessing/output/`; they are identical to those in `Data/Processed Data/`.
+The program writes the files to `Data/Preprocessing/output/` and checks that they are identical, byte for byte, to
+those in `Data/Processed Data/`; with `--check` it stops with an error if they are not. GitHub repeats this check on
+Linux, macOS and Windows after every change, and the badge above shows the result.
 
 ## Sources
 

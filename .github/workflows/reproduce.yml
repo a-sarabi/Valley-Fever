@@ -1,0 +1,31 @@
+# Rebuilds the processed files from the original data on Linux, macOS and Windows and checks that they are
+# identical, byte for byte, to the files in Data/Processed Data.
+name: Rebuild processed data
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    name: ${{ matrix.os }}, Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the requirements
+        run: python -m pip install -r requirements.txt
+      - name: Show the versions
+        run: python -c "import platform, sys, numpy, pandas; print(platform.platform(), platform.machine(), sys.version.split()[0], 'numpy', numpy.__version__, 'pandas', pandas.__version__)"
+      - name: Rebuild and compare with Data/Processed Data
+        working-directory: Data/Preprocessing
+        run: python preprocess_counties.py --check

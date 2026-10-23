@@ -11,16 +11,22 @@ with 1083 rows (MMWR weeks 2006_1 .. 2026_39) and no missing cells.
 
 ## Run
 
-Requires Python 3.9 or newer with numpy and pandas 1.5 or newer. The rebuilt files are identical byte for byte with
-Python 3.9, 3.11 and 3.13, pandas 1.5.3 to 3.1.0 and numpy 1.26 to 2.5, on every operating system: the program writes
-LF line endings, and `.gitattributes` makes Git check out the CSV files with LF line endings too. The `output/` folder
-is not tracked by git.
+Requires Python 3.9 or newer with numpy and pandas 1.5.3 or newer; `pip install -r requirements.txt` in the
+repository root installs them. The `output/` folder is not tracked by git.
 
 ```
 cd Data/Preprocessing
 python preprocess_counties.py                                     # all counties -> output/
+python preprocess_counties.py --check                             # the same; exit status 1 if a file differs
 python preprocess_counties.py --counties Pima Pinal --end 2026_39
 ```
+
+Every run ends by comparing its final files with those in `Data/Processed Data/`, byte for byte, and prints
+`identical to` or `DIFFERS from` for each county. The files are identical with Python 3.9, 3.11 and 3.13, pandas 1.5.3
+to 3.1.0 and numpy 1.26 to 2.5: the weekly means do not depend on the pandas version, the program writes LF line
+endings, and `.gitattributes` makes Git check out the CSV files with LF line endings on every system. The GitHub
+workflow `.github/workflows/reproduce.yml` reruns `python preprocess_counties.py --check` from a fresh checkout on
+Linux, macOS and Windows, with Python 3.9 and 3.13, after every change.
 
 The weather of all three stations is always read, because the cleaning rules compare each station with the other
 two. If an output file is open in Excel, the script writes `<name>.new.csv` (or `.new.md`) instead and says so.
@@ -31,7 +37,7 @@ The program writes these files to `output/`:
 | `Clean Processed Data2_<County>.csv` | final weekly files, identical to those in `Data/Processed Data/` |
 | `<County>_weather_daily.csv`, `<County>_weather_weekly_mmwr.csv` | daily AZMET table after cleaning and filling, and its MMWR-week means (`n_days` = days in the week) |
 | `<County>_pm10_daily.csv`, `<County>_pm10_weekly_mmwr.csv` | monitor-averaged daily PM10/AQI (`n_monitors`, `n_airnow`) and MMWR-week means |
-| `preprocessing_report.md` | what was read, flagged, filled, estimated or dropped, per county |
+| `preprocessing_report.md` | what was read, flagged, filled, estimated or dropped, per county, and the comparison with `Data/Processed Data/` |
 
 ## Steps
 
