@@ -76,6 +76,9 @@ COUNTIES: dict[str, dict] = {
 # workbooks, which are not in this repository (see README.md)
 CASES_CSV = DATA / "Valley Fever Data" / "cases_weekly_by_county.csv"
 
+# the published weekly files; every run compares its final files with them (--check: exit 1 if one differs)
+PROCESSED = DATA / "Processed Data"
+
 # last MMWR week of every county file: the last week in cases_weekly_by_county.csv
 DEFAULT_END = "2026_39"
 
@@ -807,7 +810,7 @@ def parse_week(s: str) -> tuple[int, int]:
 
 
 def build_county(county: str, cases: pd.DataFrame, end, out: Path,
-                 weather_entry: tuple[pd.DataFrame, dict]) -> list[str]:
+                 weather_entry: tuple[pd.DataFrame, dict]) -> tuple[list[str], Path]:
     cfg = COUNTIES[county]
     out.mkdir(parents=True, exist_ok=True)
     log(f"\n=== {county} ===")
@@ -874,7 +877,7 @@ def build_county(county: str, cases: pd.DataFrame, end, out: Path,
         f"weeks built from fewer than 7 PM10 days: {len(finfo['partial_weeks']['pm10'])} {finfo['partial_weeks']['pm10']}",
         f"weekly values interpolated because a whole week was missing: {finfo['weekly_gaps_filled'] or 'none'}",
     ]
-    return report
+    return report, written
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -884,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="last MMWR week to keep, written YEAR_WEEK (default: %(default)s, so that all counties cover the same weeks; "
                         "'cases' = the last week in cases_weekly_by_county.csv)")
     p.add_argument("--out", default=None, help="output folder (default: output/)")
+    p.add_argument("--check", action="store_true",
+                   help="exit with status 1 if a rebuilt file differs from the one in Data/Processed Data")
     args = p.parse_args(argv)
     out = Path(args.out) if args.out else OUT
     out.mkdir(parents=True, exist_ok=True)
@@ -902,10 +907,28 @@ def main(argv: list[str] | None = None) -> int:
               "  (the most recent weeks are preliminary: ADHS revises them in later workbooks)"]
 
     weather = prepare_weather()
+    written = {}
     for county in args.counties:
-        report += [""] + build_county(county, cases, end, out, weather[county])
+        rep, written[county] = build_county(county, cases, end, out, weather[county])
+        report += [""] + rep
+
+    # compare the rebuilt final files with the published ones, byte for byte
+    log("")
+    report += ["", "## Comparison with Data/Processed Data"]
+    differ = []
+    for county, path in written.items():
+        ref = PROCESSED / f"Clean Processed Data2_{county}.csv"
+        same = ref.exists() and path.read_bytes() == ref.read_bytes()
+        line = f"{path.name}: {'identical to' if same else 'DIFFERS from'} Data/Processed Data/{ref.name}"
+        log(line)
+        report.append(line)
+        if not same:
+            differ.append(county)
     report_path = save_text("\n".join(report) + "\n", out / "preprocessing_report.md")
     log(f"\nreport: {report_path}")
+    if args.check and differ:
+        log(f"check failed: the rebuilt files of {', '.join(differ)} differ from Data/Processed Data")
+        return 1
     return 0
 
 
