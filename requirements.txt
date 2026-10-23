@@ -1,3 +1,3 @@
-# Python 3.9 or newer; install with: pip install -r requirements.txt
+# Python 3.9 or newer; install with: python -m pip install -r requirements.txt
 numpy>=1.26
 pandas>=1.5.3

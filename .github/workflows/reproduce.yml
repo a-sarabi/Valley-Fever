@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # every Monday, to catch new numpy or pandas releases
   workflow_dispatch:
 
 jobs:
@@ -29,3 +31,32 @@ jobs:
       - name: Rebuild and compare with Data/Processed Data
         working-directory: Data/Preprocessing
         run: python preprocess_counties.py --check
+
+  readme-steps:
+    # Runs the commands of README.md exactly as written, with each runner's own Python.
+    name: README steps, ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: README commands for macOS and Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install -r requirements.txt
+          cd Data/Preprocessing
+          python preprocess_counties.py --check
+      - name: README commands for Windows (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          py -m venv .venv
+          .venv\Scripts\activate
+          python -m pip install -r requirements.txt
+          cd Data\Preprocessing
+          python preprocess_counties.py --check

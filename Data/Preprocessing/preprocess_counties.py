@@ -148,11 +148,13 @@ def log(msg: str) -> None:
 def save_text(text: str, path: Path) -> Path:
     """Write ``text`` to ``path``; if the file is locked, write ``<name>.new<suffix>`` instead."""
     try:
-        path.write_text(text, encoding="utf-8")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
         return path
     except PermissionError:
         alt = path.with_name(path.stem + ".new" + path.suffix)
-        alt.write_text(text, encoding="utf-8")
+        with open(alt, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
         log(f"  WARNING: {path.name} is locked by another program; written to {alt.name} instead")
         return alt
 
